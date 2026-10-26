@@ -252,12 +252,7 @@ struct BufferPreviewSheet: View {
                     .font(.system(size: 9, weight: .semibold)).tracking(0.8)
                     .foregroundStyle(savedURL == nil ? Theme.muted : Theme.green)
             }.padding(20)
-            NativePlayer(player: player, allowsFullScreen: !model.recording).frame(height: 270)
-            if model.recording {
-                Text("Во время записи просмотр Spy работает в окне: полноэкранный плеер исключён из захвата.")
-                    .font(.system(size: 10)).foregroundStyle(Theme.muted)
-                    .padding(.horizontal, 20).padding(.top, 6)
-            }
+            FullSizePlayer(player: player, title: "Просмотр буфера").frame(height: 270)
             if let audioControls {
                 VideoMicrophoneView(controls: audioControls, onChange: { microphoneEnabled = $0 })
                     .padding(.horizontal, 20).padding(.top, 10).disabled(model.saving)

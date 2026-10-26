@@ -27,7 +27,7 @@ import AppKit
             model.audioMeter = AudioMeter(system: 0.12, microphone: 0.05)
         }
         if section == 3 {
-            model.journal.record(.info, "Пример: запуск", "Spy 1.10.0 запущен. Журнал сохраняется между запусками.")
+            model.journal.record(.info, "Пример: запуск", "Spy 1.10.1 запущен. Журнал сохраняется между запусками.")
             model.journal.record(.info, "Пример: настройка клавиш", "Сохранить повтор → ⌃⇧S")
             model.journal.record(.warning, "Пример: доступ к экрану", "Разрешение ещё не получено. Разрешите Spy запись экрана в настройках macOS.")
             model.journal.record(.error, "Пример: захват экрана", "Не удалось запустить захват.\nДомен: com.apple.ScreenCaptureKit.SCStreamErrorDomain · Код: −3801")

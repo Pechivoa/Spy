@@ -59,6 +59,29 @@ import ScreenCaptureKit
         try SelfTest.require(!activePlayer.showsFullScreenToggleButton && stoppedPlayer.showsFullScreenToggleButton, "The actual AVPlayerView hides fullscreen only while its screen is being captured")
         print("PASS: native window fullscreen protection and native player fullscreen policy")
 
+        let item = AVPlayerItem(asset: asset)
+        let playback = AVPlayer(playerItem: item)
+        playback.volume = 0.37; playback.isMuted = true
+        let host = FullSizePlayerHost(player: playback, title: "Synthetic playback")
+        window.contentView = host
+        let sourceFrame = window.frame
+        let presentationOptions = NSApp.presentationOptions
+        try SelfTest.require(host.presentation.present(host, show: false), "Full-size playback is available while native fullscreen remains protected")
+        guard let fullSizeWindow = host.presentation.panel else { throw SpyError.message("TEST FAILED: full-size player window") }
+        try SelfTest.require(fullSizeWindow.collectionBehavior.contains(.fullScreenNone) && !fullSizeWindow.styleMask.contains(.fullScreen), "Full-size playback never requests an excluded native fullscreen Space")
+        try SelfTest.require(fullSizeWindow.frame == (window.screen ?? NSScreen.main)?.frame, "Full-size playback covers the originating display")
+        try SelfTest.require(host.playerView.superview === fullSizeWindow.contentView && host.playerView.player === playback && playback.currentItem === item && !host.playerView.showsFullScreenToggleButton, "The actual player view and audio item are moved without creating another renderer")
+        NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: NSApp)
+        try await Task.sleep(nanoseconds: 30_000_000)
+        try SelfTest.require(host.presentation.panel === fullSizeWindow, "Dock and menu-bar presentation notifications cannot immediately close fullscreen playback")
+        fullSizeWindow.cancelOperation(nil)
+        try SelfTest.require(host.presentation.panel == nil && host.playerView.superview === host && window.frame == sourceFrame, "Escape restores the original player and leaves the source window unchanged")
+        try SelfTest.require(playback.volume == 0.37 && playback.isMuted && playback.currentItem === item && NSApp.presentationOptions == presentationOptions, "Fullscreen exit preserves selected audio and presentation settings")
+        try SelfTest.require(host.presentation.present(host, show: false), "Full-size playback can reopen")
+        host.update(player: nil, title: "Closed snapshot")
+        try SelfTest.require(host.presentation.panel == nil && host.playerView.superview === host && host.playerView.player == nil && !host.expandButton.isEnabled, "Replacing or closing a preview releases its fullscreen panel and disables stale media")
+        print("PASS: full-size same-view playback, no native Space, Escape return, audio preservation and snapshot replacement cleanup")
+
         let model = AppModel(preview: true)
         defer { try? FileManager.default.removeItem(at: model.libraryURL.deletingLastPathComponent()) }
         try model.engine.beginTest(seconds: 30)

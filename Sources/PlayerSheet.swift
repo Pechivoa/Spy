@@ -35,11 +35,7 @@ struct PlayerSheet: View {
                 Button("Закрыть") { dismiss() }.keyboardShortcut(.cancelAction).disabled(model.saving)
             }.buttonStyle(.bordered).padding(20)
             if let playbackError { Text(playbackError).font(.system(size: 12)).foregroundStyle(Theme.accent).padding(.horizontal, 20).padding(.bottom, 14) }
-            NativePlayer(player: player, allowsFullScreen: !model.recording).frame(height: 380)
-            if model.recording {
-                Text("Во время записи просмотр Spy работает в окне: полноэкранный плеер исключён из захвата.")
-                    .font(.system(size: 11)).foregroundStyle(Theme.muted).padding(.horizontal, 20).padding(.top, 8)
-            }
+            FullSizePlayer(player: player, title: current.title).frame(height: 380)
             if let audioControls {
                 VideoMicrophoneView(controls: audioControls, onChange: { microphoneEnabled = $0 }, saveCopy: {
                     player?.pause(); result = nil; trimError = nil
