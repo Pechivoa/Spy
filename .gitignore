@@ -1,0 +1,34 @@
+# Swift / Xcode
+.build/
+.swiftpm/
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keychain
+*.keychain-db
+keychain-password
+
+# User recordings, exports, diagnostics and local packages
+*.mov
+*.mp4
+*.m4a
+*.wav
+*.log
+*.zip
+*.dmg
+*.app/
