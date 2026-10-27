@@ -167,6 +167,23 @@ enum SelfTest {
 
 @main struct SpyBootstrap {
     @MainActor static func main() async {
+        if let index = CommandLine.arguments.firstIndex(of: "--capture-tuning-test"), CommandLine.arguments.count > index + 1 {
+            do {
+                let directory = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
+                try await CaptureTuningTests.run(directory: directory)
+                try await CaptureTuningIntegrationTests.run(directory: directory.appendingPathComponent("integration"))
+                exit(0)
+            }
+            catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--editor-test"), CommandLine.arguments.count > index + 1 {
+            do { try await FullscreenEditorTests.run(directory: URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)); exit(0) }
+            catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--application-audio-test"), CommandLine.arguments.count > index + 1 {
+            do { try await ApplicationAudioTests.run(directory: URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)); exit(0) }
+            catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--capture-reliability-test"), CommandLine.arguments.count > index + 1 {
             do { try await CaptureReliabilityTests.run(directory: URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)); exit(0) }
             catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }

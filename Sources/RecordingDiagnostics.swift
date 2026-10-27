@@ -141,7 +141,7 @@ struct RecordingDiagnosticResult: Identifiable {
             let snapshot = try await engine.snapshot(seconds: 5)
             pinnedDirectory = snapshot.directory
             try Task.checkCancellation()
-            progress = "Читаю кадры H.264 и дорожки AAC…"
+            progress = "Читаю видеокадры и дорожки AAC…"
             let playback = try await BufferPlayback.prepare(snapshot, levels: AudioLevels())
             let checks = try await RecordingDiagnosticAnalyzer.inspect(playback: playback, config: config, expectedDimensions: dimensions)
             report += checks.map { $0.component == .microphone ? blockedMicrophone ?? $0 : $0 }
@@ -194,7 +194,7 @@ enum RecordingDiagnosticAnalyzer {
     static func inspect(playback: BufferPlayback, config: RecordingConfig, expectedDimensions: CGSize?) async throws -> [RecordingDiagnosticResult] {
         var result: [RecordingDiagnosticResult] = []
         do {
-            let detail = try await inspectVideo(asset: playback.asset, expectedDimensions: expectedDimensions, quality: config.quality)
+            let detail = try await inspectVideo(asset: playback.asset, expectedDimensions: expectedDimensions, quality: config.quality, expectedCodec: config.encoding.codec)
             result.append(.init(component: .video, status: .passed, detail: detail))
         } catch is CancellationError { throw CancellationError() }
         catch { result.append(.init(component: .video, status: .failed, detail: describeError(error))) }
@@ -226,10 +226,20 @@ enum RecordingDiagnosticAnalyzer {
         return result
     }
 
-    private static func inspectVideo(asset: AVAsset, expectedDimensions: CGSize?, quality: Quality) async throws -> String {
+    private static func inspectVideo(asset: AVAsset, expectedDimensions: CGSize?, quality: Quality, expectedCodec: CaptureVideoCodec) async throws -> String {
         try Task.checkCancellation()
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw SpyError.message("В фрагменте нет видеодорожки.") }
-        let packets = try readCompressed(asset: asset, track: track, codec: kCMVideoCodecType_H264)
+        let descriptions = try await track.load(.formatDescriptions)
+        guard let codec = descriptions.first.map({ CMFormatDescriptionGetMediaSubType($0) }),
+              codec == kCMVideoCodecType_H264 || codec == kCMVideoCodecType_HEVC,
+              descriptions.allSatisfy({ CMFormatDescriptionGetMediaSubType($0) == codec }) else {
+            throw SpyError.message("Видеодорожка имеет неподдерживаемый или смешанный формат. Ожидается H.264 или HEVC.")
+        }
+        let codecName = codec == kCMVideoCodecType_HEVC ? "HEVC" : "H.264"
+        guard codec == expectedCodec.mediaCodec else {
+            throw SpyError.message("В видео обнаружен \(codecName), в настройках выбран \(expectedCodec == .hevc ? "HEVC" : "H.264"). Остановите повтор и проверьте формат перед новым запуском.")
+        }
+        let packets = try readCompressed(asset: asset, track: track, codec: codec)
         let size = try await track.load(.naturalSize)
         let width = Int(abs(size.width)), height = Int(abs(size.height))
         guard width > 0, height > 0, width % 2 == 0, height % 2 == 0 else { throw SpyError.message("Неверный размер видеокадра: \(width)×\(height).") }
@@ -257,10 +267,10 @@ enum RecordingDiagnosticAnalyzer {
             frames += 1
         }
         try completed(reader)
-        guard frames > 0 else { throw SpyError.message("H.264-дорожка не содержит читаемых кадров.") }
+        guard frames > 0 else { throw SpyError.message("\(codecName)-дорожка не содержит читаемых кадров.") }
         let duration = min(5, (try await asset.load(.duration)).seconds)
         guard duration.isFinite, duration > 0 else { throw SpyError.message("Некорректная длительность видео.") }
-        return "H.264: \(width)×\(height), \(frames) кадров за \(String(format: "%.2f", duration)) с; \(packets) пакетов прочитано и декодировано."
+        return "\(codecName): \(width)×\(height), \(frames) кадров за \(String(format: "%.2f", duration)) с; \(packets) пакетов прочитано и декодировано."
     }
 
     private static func makeReader(asset: AVAsset) throws -> AVAssetReader {
@@ -290,7 +300,8 @@ enum RecordingDiagnosticAnalyzer {
             if CMSampleBufferGetNumSamples(sample) == 0 { continue }
             guard let format = CMSampleBufferGetFormatDescription(sample), CMFormatDescriptionGetMediaSubType(format) == codec,
                   CMSampleBufferDataIsReady(sample), CMSampleBufferGetTotalSampleSize(sample) > 0 else {
-                throw SpyError.message(codec == kCMVideoCodecType_H264 ? "Дорожка не содержит корректных пакетов H.264." : "Дорожка не содержит корректных пакетов AAC.")
+                let name = codec == kCMVideoCodecType_H264 ? "H.264" : codec == kCMVideoCodecType_HEVC ? "HEVC" : "AAC"
+                throw SpyError.message("Дорожка не содержит корректных пакетов \(name).")
             }
             packets += CMSampleBufferGetNumSamples(sample)
         }

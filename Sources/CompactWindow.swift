@@ -190,13 +190,13 @@ struct CompactSpyView: View {
                     }.frame(maxWidth: .infinity).frame(height: tiny ? 32 : 38)
                         .background(model.recording ? Color.white.opacity(0.08) : Theme.accent, in: RoundedRectangle(cornerRadius: 9))
                 }.buttonStyle(.plain).disabled(model.diagnosticsBusy || model.busy || model.saving || (!model.recording && model.minutes == 0))
-                Button { Task { await model.previewBuffer() } } label: {
+                Button { Task { await model.openBufferPreview() } } label: {
                     Group {
                         if model.preparingBufferPreview { ProgressView().controlSize(.mini) }
                         else { Image(systemName: "play.rectangle") }
                     }.frame(width: 28, height: tiny ? 32 : 38)
                         .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
-                }.buttonStyle(.plain).disabled(!model.canPreviewBuffer)
+                }.buttonStyle(.plain).disabled(!model.canPreviewBuffer && model.bufferPreview == nil)
                     .accessibilityLabel("Просмотреть буфер").help("Посмотреть видео перед сохранением")
                 Button { Task { await model.saveSpy() } } label: {
                     Label(model.saving ? "Сохранение…" : "Сохранить", systemImage: "square.and.arrow.down")
@@ -264,6 +264,9 @@ struct CompactSpyView: View {
                         }
                         Toggle("Микрофон", isOn: $model.microphone).disabled(!model.microphoneAvailable || model.recording || model.diagnosticsBusy || model.busy || model.saving)
                         MicrophonePickerView(model: model)
+                        ApplicationAudioPickerView(model: model)
+                        Button("Формат, кэш и приватные области") { model.section = 2; window.showExpanded() }
+                            .buttonStyle(.bordered)
                         Button(model.manualRecording ? "Завершить ручную запись" : "Ручная запись") { Task { await model.toggleManual() } }
                             .buttonStyle(.bordered).disabled(model.diagnosticsBusy || model.busy || model.saving)
                             .help(model.shortcuts.manual.label)

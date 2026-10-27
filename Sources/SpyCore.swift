@@ -42,6 +42,10 @@ struct RecordingConfig {
     var microphoneID: String? = nil
     var excludedBundleIDs: Set<String> = []
     var microphoneCleanup: Bool = false
+    var applicationAudioMode: ApplicationAudioMode = .all
+    var applicationAudioBundleIDs: Set<String> = []
+    var encoding: CaptureEncodingOptions = .init()
+    var masks: [RecordingMask] = []
 }
 
 struct BufferStats {
@@ -100,9 +104,19 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
     var onFailure: ((String) -> Void)?
     var onDiagnostic: ((LogLevel, String, String) -> Void)?
     var onLevels: ((AudioMeter) -> Void)?
+    var onApplicationAudioWarning: ((String?) -> Void)?
+    /// Used by the isolated lifecycle regression; normal capture calls SCStream.
+    var applicationAudioStartOverride: ((SCStream) async throws -> Void)?
     private var meter = AudioMeter()
     private var lastMeterTime: [AudioSource: Double] = [:]
     private var stream: SCStream?
+    private var applicationAudioStream: SCStream?
+    private var applicationAudioStreamStarted = false
+    private var applicationAudioStreamStarting = false
+    private var applicationAudioProcesses: Set<pid_t> = []
+    private var applicationAudioDisplay: CGDirectDisplayID?
+    private var applicationAudioWarning: String?
+    private var usesApplicationAudio = false
     private var ticker: DispatchSourceTimer?
     private var latestPixel: CVPixelBuffer?
     private let ownedFrames = OwnedScreenFrames()
@@ -155,6 +169,8 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
     private var height = 1080
     private var fps = 30
     private var bitrate = 8_000_000
+    private var encoding = CaptureEncodingOptions()
+    private var recordingMasks: [RecordingMask] = []
     private var includesAudio = true
     private var includesMicrophone = false
     private var segmentLength = 5.0
@@ -199,7 +215,7 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
         options.queueDepth = 5
         options.showsCursor = true
         options.scalesToFit = true
-        options.capturesAudio = config.audio
+        options.capturesAudio = config.audio && config.applicationAudioMode == .all
         options.excludesCurrentProcessAudio = true
         options.sampleRate = 48_000
         options.channelCount = 2
@@ -208,18 +224,25 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
             options.microphoneCaptureDeviceID = config.microphoneID
         } else if config.microphone { throw SpyError.message("Запись микрофона доступна на macOS 15 и новее.") }
         try queue.sync {
-            try prepare(width: w, height: h, fps: config.quality.fps, bitrate: config.quality.bitrate, audio: config.audio, microphone: config.microphone, microphoneCleanup: config.microphoneCleanup, seconds: config.seconds)
+            try prepare(width: w, height: h, fps: config.quality.fps, bitrate: config.quality.bitrate, audio: config.audio, microphone: config.microphone, microphoneCleanup: config.microphoneCleanup, seconds: config.seconds, encoding: config.encoding, masks: config.masks)
             activeConfig = config
+            usesApplicationAudio = config.audio && config.applicationAudioMode == .selected
         }
         do {
             let capture = SCStream(filter: filter, configuration: options, delegate: self)
             try capture.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
-            if config.audio { try capture.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue) }
+            if config.audio && config.applicationAudioMode == .all { try capture.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue) }
             if #available(macOS 15.0, *), config.microphone { try capture.addStreamOutput(self, type: .microphone, sampleHandlerQueue: queue) }
             queue.sync { stream = capture }
             onDiagnostic?(.info, "ScreenCaptureKit", "Запуск потока: \(w)×\(h), \(config.quality.fps) FPS, система: \(config.audio), микрофон: \(config.microphone).")
             try await capture.startCapture()
             try Task.checkCancellation()
+            if config.audio && config.applicationAudioMode == .selected {
+                let id = queue.sync { sessionID }
+                try await privacyFilterQueue.run { [self] in
+                    await configureApplicationAudio(config, content: content, session: id)
+                }
+            }
             if queue.sync(execute: { privacyFilterUpdating }) {
                 try await refreshPrivacyExclusions(queue.sync { requestedExclusions ?? config.excludedBundleIDs })
             }
@@ -239,9 +262,19 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
     }
 
     func requestPrivacyBlock(_ blocked: Bool) {
-        queue.sync {
+        let reconcile = queue.sync { () -> UUID? in
             privacyBlockRequested = blocked
             if blocked { latestPixel = nil; encoderPerformance.resumeWindow(); publishStats() }
+            guard !blocked, active, usesApplicationAudio, !privacyPaused, !privacyFilterUpdating else { return nil }
+            return sessionID
+        }
+        if let reconcile {
+            Task { [weak self] in
+                guard let self else { return }
+                try? await self.privacyFilterQueue.run { [self] in
+                    await self.startApplicationAudioStream(session: reconcile)
+                }
+            }
         }
     }
 
@@ -251,6 +284,155 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
             privacyFilterUpdating = true; latestPixel = nil
             encoderPerformance.resumeWindow(); publishStats()
         }
+    }
+
+    /// App audio owns a separate stream: narrowing it never narrows the video
+    /// target or duplicates the microphone/system audio from the main stream.
+    func refreshApplicationAudio() async throws {
+        let id = queue.sync { sessionID }
+        try await privacyFilterQueue.run { [self] in
+            guard let config = queue.sync(execute: { () -> RecordingConfig? in
+                guard active, sessionID == id, usesApplicationAudio, !privacyPaused,
+                      !privacyBlockRequested, !privacyFilterUpdating else { return nil }
+                return activeConfig
+            }) else { return }
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            guard queue.sync(execute: { active && sessionID == id && !privacyFilterUpdating && !privacyBlockRequested && !privacyPaused }) else { throw CancellationError() }
+            await configureApplicationAudio(config, content: content, session: id)
+        }
+    }
+
+    private func configureApplicationAudio(_ config: RecordingConfig, content: SCShareableContent, session: UUID) async {
+        guard queue.sync(execute: { active && sessionID == session }) else { return }
+        let allowed = ApplicationAudioPolicy.allowedBundleIDs(selected: config.applicationAudioBundleIDs,
+            excluded: config.excludedBundleIDs, ownBundleID: Bundle.main.bundleIdentifier)
+        let apps = content.applications.filter { allowed.contains($0.bundleIdentifier.lowercased()) }
+        let display = content.displays.first(where: { $0.displayID == config.displayID }) ?? content.displays.first
+        let processes = Set(apps.map(\.processID))
+        let requested = CapturePrivacyPolicy.normalizedIDs(config.applicationAudioBundleIDs)
+        let missing = allowed.subtracting(Set(apps.map { $0.bundleIdentifier.lowercased() }))
+        let blocked = requested.intersection(CapturePrivacyPolicy.normalizedIDs(config.excludedBundleIDs))
+        let selectionWarning: String? = !blocked.isEmpty
+            ? "Звук части выбранных приложений отключён настройками приватности. Остальные выбранные источники записываются."
+            : !missing.isEmpty ? "Некоторые выбранные приложения пока недоступны. Записывается звук доступных; остальные приложения не подставляются." : nil
+        if config.audio && config.applicationAudioMode == .selected && !apps.isEmpty,
+           let display,
+           await reuseApplicationAudioStream(processes: processes, display: display.displayID, warning: selectionWarning, session: session) {
+            return
+        }
+        let previous = queue.sync { detachApplicationAudioStream() }
+        if previous.started {
+            do { try await previous.capture?.stopCapture() }
+            catch { onDiagnostic?(.warning, "Остановка звука приложений", describeError(error)) }
+        }
+        guard queue.sync(execute: { active && sessionID == session }) else { return }
+        guard config.audio && config.applicationAudioMode == .selected else {
+            queue.sync { updateApplicationAudioWarning(nil) }; return
+        }
+        guard let display, !apps.isEmpty else {
+            queue.sync {
+                guard active, sessionID == session else { return }
+                let detail = config.applicationAudioBundleIDs.isEmpty
+                    ? "Приложения со звуком не выбраны. Системный звук сейчас не записывается."
+                    : "Выбранные приложения не запущены или исключены приватностью. Их звук сейчас не записывается."
+                updateApplicationAudioWarning(detail)
+            }
+            return
+        }
+        do {
+            let filter = SCContentFilter(display: display, including: apps, exceptingWindows: [])
+            let options = SCStreamConfiguration()
+            options.width = 2; options.height = 2
+            options.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+            options.queueDepth = 3
+            options.capturesAudio = true; options.excludesCurrentProcessAudio = true
+            options.sampleRate = 48_000; options.channelCount = 2
+            let capture = SCStream(filter: filter, configuration: options, delegate: self)
+            try capture.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
+            let accepted = queue.sync { () -> Bool in
+                guard active, sessionID == session else { return false }
+                applicationAudioStream = capture; applicationAudioProcesses = processes
+                applicationAudioDisplay = display.displayID
+                updateApplicationAudioWarning(selectionWarning)
+                return true
+            }
+            guard accepted else { return }
+            onDiagnostic?(.info, "Звук приложений", "Отдельный поток только выбранных приложений: " + apps.map(\.applicationName).sorted().joined(separator: ", ") + ". Источник изображения и микрофон не меняются.")
+            if queue.sync(execute: { !privacyPaused && !privacyBlockRequested }) {
+                await startApplicationAudioStream(session: session)
+            }
+        } catch {
+            queue.sync {
+                guard active, sessionID == session else { return }
+                updateApplicationAudioWarning("Не удалось включить звук выбранных приложений. Видео и микрофон продолжаются. Обновите список или перезапустите повтор.")
+            }
+            onDiagnostic?(.warning, "Звук приложений", describeError(error))
+        }
+    }
+
+    /// A matching process set only means its filter can be reused. The stream
+    /// may still be dormant after configuration overlapped a transient privacy
+    /// block, so reconciliation must also attempt the guarded start.
+    private func reuseApplicationAudioStream(processes: Set<pid_t>, display: CGDirectDisplayID, warning: String?, session: UUID) async -> Bool {
+        guard queue.sync(execute: {
+            active && sessionID == session && applicationAudioStream != nil &&
+                applicationAudioProcesses == processes && applicationAudioDisplay == display
+        }) else { return false }
+        queue.sync {
+            guard active, sessionID == session else { return }
+            updateApplicationAudioWarning(warning)
+        }
+        await startApplicationAudioStream(session: session)
+        return true
+    }
+
+    private func startApplicationAudioStream(session: UUID, resuming: Bool = false) async {
+        guard let capture = queue.sync(execute: { () -> SCStream? in
+            guard active, sessionID == session, !privacyBlockRequested, !privacyFilterUpdating,
+                  resuming || !privacyPaused, !applicationAudioStreamStarted,
+                  !applicationAudioStreamStarting, let capture = applicationAudioStream else { return nil }
+            applicationAudioStreamStarting = true
+            return capture
+        }) else { return }
+        do {
+            if let applicationAudioStartOverride { try await applicationAudioStartOverride(capture) }
+            else { try await capture.startCapture() }
+            let accepted = queue.sync { () -> Bool in
+                guard sessionID == session, applicationAudioStream === capture else { return false }
+                applicationAudioStreamStarting = false
+                guard active, !privacyBlockRequested, !privacyFilterUpdating, resuming || !privacyPaused else { return false }
+                applicationAudioStreamStarted = true
+                return true
+            }
+            if !accepted {
+                queue.sync { if sessionID == session && applicationAudioStream === capture { _ = detachApplicationAudioStream() } }
+                try? await capture.stopCapture()
+            }
+        } catch {
+            queue.sync {
+                guard active, sessionID == session, applicationAudioStream === capture else { return }
+                _ = detachApplicationAudioStream()
+                updateApplicationAudioWarning("Звук выбранных приложений недоступен. Видео и микрофон продолжаются; звук остальных приложений не подставляется.")
+            }
+            try? await capture.stopCapture()
+            onDiagnostic?(.warning, "Запуск звука приложений", describeError(error))
+        }
+    }
+
+    /// Encoder queue only. Removing identity before stopping rejects late samples.
+    private func detachApplicationAudioStream() -> (capture: SCStream?, started: Bool) {
+        let result = (applicationAudioStream, applicationAudioStreamStarted)
+        applicationAudioStream = nil; applicationAudioStreamStarted = false; applicationAudioStreamStarting = false
+        applicationAudioProcesses = []; applicationAudioDisplay = nil
+        meter.system = 0; onLevels?(meter)
+        return result
+    }
+
+    private func updateApplicationAudioWarning(_ value: String?) {
+        guard applicationAudioWarning != value else { return }
+        applicationAudioWarning = value
+        if let value { onDiagnostic?(.warning, "Звук приложений", value) }
+        onApplicationAudioWarning?(value)
     }
 
     func refreshPrivacyExclusions(_ ids: Set<String>) async throws {
@@ -273,10 +455,15 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
         }
         guard queue.sync(execute: { active && sessionID == context.2 && stream === capture }) else { throw CancellationError() }
         try await capture.updateContentFilter(filter)
-        queue.sync {
-            guard active, sessionID == context.2, stream === capture, privacyFilterRevision == context.3 else { return }
-            activeConfig = config; latestPixel = nil; privacyFilterUpdating = false
+        if config.audio && config.applicationAudioMode == .selected {
+            await configureApplicationAudio(config, content: content, session: context.2)
         }
+        let applied = queue.sync { () -> Bool in
+            guard active, sessionID == context.2, stream === capture, privacyFilterRevision == context.3 else { return false }
+            activeConfig = config; latestPixel = nil; privacyFilterUpdating = false
+            return true
+        }
+        if applied { await startApplicationAudioStream(session: context.2) }
         } } catch {
             let current = queue.sync { active && sessionID == context.2 && stream === capture && privacyFilterRevision == context.3 }
             if !current { throw CancellationError() }
@@ -285,16 +472,24 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
     }
 
     func pauseForPrivacy() async throws {
-        let capture = queue.sync { () -> SCStream? in
-            guard active else { return nil }
+        let captures = queue.sync { () -> (SCStream?, SCStream?, Bool) in
+            guard active else { return (nil, nil, false) }
             privacyPaused = true; latestPixel = nil
             ticker?.cancel(); ticker = nil; closeSegment()
-            return stream
+            let started = applicationAudioStreamStarted
+            applicationAudioStreamStarted = false
+            meter.system = 0; meter.microphone = 0; onLevels?(meter)
+            return (stream, applicationAudioStream, started)
         }
-        try await capture?.stopCapture()
+        var stopError: Error?
+        do { try await captures.0?.stopCapture() } catch { stopError = error }
+        if captures.2 {
+            do { try await captures.1?.stopCapture() } catch { if stopError == nil { stopError = error } }
+        }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             finishing.notify(queue: queue) { [self] in publishStats(); continuation.resume() }
         }
+        if let stopError { throw stopError }
     }
 
     func resumeAfterPrivacy(excluding ids: Set<String>) async throws {
@@ -316,6 +511,7 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
                 guard ready else { throw SpyError.message("Исключения ещё обновляются. Повторите продолжение записи.") }
                 guard queue.sync(execute: { active && sessionID == context.1 && stream === capture && !privacyBlockRequested }) else { return }
                 try await capture.startCapture()
+                await startApplicationAudioStream(session: context.1, resuming: true)
             } catch {
                 try? await capture.stopCapture()
                 throw error
@@ -328,7 +524,18 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
                 timer.setEventHandler { [weak self] in self?.tick(at: CMClockGetTime(CMClockGetHostTimeClock())) }
                 ticker = timer; timer.resume(); return true
             }
-            if !current { try? await capture.stopCapture() }
+            if !current {
+                try? await capture.stopCapture()
+                let audio = queue.sync { detachApplicationAudioStream() }
+                if audio.started { try? await audio.capture?.stopCapture() }
+            } else {
+                // A filter update may replace the audio stream while the old
+                // resume start is suspended. Reconcile the latest identity only
+                // after it is safe to run outside the paused state.
+                try await privacyFilterQueue.run { [self] in
+                    await startApplicationAudioStream(session: context.1)
+                }
+            }
         } else {
             queue.sync {
                 guard active, !privacyBlockRequested else { return }
@@ -338,13 +545,18 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
         }
     }
 
-    private func prepare(width: Int, height: Int, fps: Int, bitrate: Int, audio: Bool, microphone: Bool = false, microphoneCleanup: Bool = false, seconds: Double) throws {
+    private func prepare(width: Int, height: Int, fps: Int, bitrate: Int, audio: Bool, microphone: Bool = false, microphoneCleanup: Bool = false, seconds: Double, encoding: CaptureEncodingOptions = .init(), masks: [RecordingMask] = []) throws {
         guard !active else { throw SpyError.message("Буфер уже запущен.") }
         guard manualDirectory == nil else { throw SpyError.message("Сначала завершите предыдущую ручную запись.") }
+        try encoding.validateHardwareSupport(width: width, height: height)
+        try RecordingMaskProcessor.validate(masks)
         self.width = width; self.height = height; self.fps = fps; self.bitrate = bitrate
+        self.encoding = encoding; recordingMasks = masks
         microphoneFilter.enabled = microphoneCleanup; microphoneFilter.reset()
         encoderPerformance.reset(fps: fps); lastAttemptTime = 0
         privacyPaused = false
+        usesApplicationAudio = false
+        updateApplicationAudioWarning(nil)
         includesAudio = audio
         includesMicrophone = microphone
         limitSeconds = min(1800, max(0, seconds))
@@ -369,16 +581,22 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
     }
 
     func stop(preserveForRecovery: Bool = false) async {
-        let capture = queue.sync { () -> SCStream? in
+        let captures = queue.sync { () -> (SCStream?, SCStream?, Bool) in
             let capture = stream; stream = nil
+            let audio = detachApplicationAudioStream()
             active = false
             privacyPaused = false; privacyFilterUpdating = false; activeConfig = nil
             ticker?.cancel(); ticker = nil
             resolveFirstFrame(.failure(CancellationError()))
-            return capture
+            usesApplicationAudio = false; updateApplicationAudioWarning(nil)
+            return (capture, audio.capture, audio.started)
         }
-        do { try await capture?.stopCapture() }
+        do { try await captures.0?.stopCapture() }
         catch { onDiagnostic?(.warning, "Остановка потока", describeError(error)) }
+        if captures.2 {
+            do { try await captures.1?.stopCapture() }
+            catch { onDiagnostic?(.warning, "Остановка звука приложений", describeError(error)) }
+        }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             queue.async { [self] in
                 closeSegment()
@@ -480,7 +698,13 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
-        guard self.stream === stream, active, !privacyBlockRequested, !privacyFilterUpdating, CMSampleBufferIsValid(sampleBuffer) else { return }
+        guard active, !privacyBlockRequested, !privacyFilterUpdating, CMSampleBufferIsValid(sampleBuffer) else { return }
+        if outputType == .audio {
+            guard usesApplicationAudio ? applicationAudioStream === stream : self.stream === stream else { return }
+            appendAudio(sampleBuffer)
+            return
+        }
+        guard self.stream === stream else { return }
         if outputType == .screen {
             guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
                   let raw = attachments.first?[.status] as? Int,
@@ -504,11 +728,10 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
                     if now - lastCopyPressure > 5 { lastCopyPressure = now; onDiagnostic?(.warning, "Кадры источника", "Кодировщик удерживает пул кадров. Входящий кадр пропущен без удержания поверхности macOS.") }
                     return
                 }
-                latestPixel = owned
                 inspectSourceBrightness(owned)
+                try RecordingMaskProcessor.apply(recordingMasks, to: owned)
+                latestPixel = owned
             } catch { onDiagnostic?(.error, "Кадр экрана", describeError(error)); fail(error.localizedDescription) }
-        } else if outputType == .audio {
-            appendAudio(sampleBuffer)
         } else if #available(macOS 15.0, *), outputType == .microphone {
             appendAudio(sampleBuffer, microphone: true)
         }
@@ -516,7 +739,14 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         queue.async { [weak self] in
-            guard let self, self.stream === stream, self.active, !self.privacyPaused else { return }
+            guard let self, self.active, !self.privacyPaused else { return }
+            if self.applicationAudioStream === stream {
+                _ = self.detachApplicationAudioStream()
+                self.updateApplicationAudioWarning("Поток звука выбранных приложений остановился. Видео и микрофон продолжаются; обновите список для повторного подключения.")
+                self.onDiagnostic?(.warning, "Звук приложений", describeError(error))
+                return
+            }
+            guard self.stream === stream else { return }
             self.onDiagnostic?(.error, "ScreenCaptureKit", describeError(error))
             self.fail("Захват остановлен: " + error.localizedDescription)
         }
@@ -558,22 +788,11 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
         guard let directory else { throw SpyError.message("Нет папки буфера.") }
         let url = directory.appendingPathComponent(String(format: "%020lld.mov", Int64(timestamp.seconds * 1_000_000)))
         let encoder = try AVAssetWriter(outputURL: url, fileType: .mov)
-        let video = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: width, AVVideoHeightKey: height,
-            AVVideoColorPropertiesKey: [
-                AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
-                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
-                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2
-            ],
-            AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: bitrate,
-                AVVideoExpectedSourceFrameRateKey: fps,
-                AVVideoMaxKeyFrameIntervalKey: fps * 2,
-                AVVideoAllowFrameReorderingKey: false,
-                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
-            ]
-        ])
+        let settings = try encoding.videoSettings(width: width, height: height, fps: fps, defaultBitrate: bitrate)
+        guard encoder.canApply(outputSettings: settings, forMediaType: .video) else {
+            throw SpyError.message("Кодировщик не поддерживает выбранный формат видео. Выберите другое качество или формат.")
+        }
+        let video = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         video.expectsMediaDataInRealTime = true
         encoder.add(video)
         let pixelAdaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: video, sourcePixelBufferAttributes: [
@@ -629,7 +848,7 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
             currentFrames += 1; frameCount += 1; lastFrameTime = timestamp
             encoderPerformance.record(at: timestamp.seconds, accepted: true)
             if frameCount == 1 {
-                onDiagnostic?(.info, "Первый кадр", "Кадр принят H.264-кодировщиком: \(width)×\(height).")
+                onDiagnostic?(.info, "Первый кадр", "Кадр принят \(encoding.codec == .hevc ? "HEVC" : "H.264")-кодировщиком: \(width)×\(height).")
                 resolveFirstFrame(.success(()))
             }
             let now = CMTimeGetSeconds(timestamp)
@@ -732,6 +951,12 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
         while let first = segments.first, retained - first.seconds >= limitSeconds {
             retained -= first.seconds
             try? FileManager.default.removeItem(at: first.url); segments.removeFirst()
+        }
+        let evicted = CacheByteBudget.removalURLs(candidates: segments.map(\.url),
+            reservedURLs: Array(finalizingSegments.keys) + (currentURL.map { [$0] } ?? []), limitBytes: encoding.cacheLimitBytes)
+        for url in evicted {
+            do { try FileManager.default.removeItem(at: url); segments.removeAll { $0.url == url } }
+            catch { onDiagnostic?(.warning, "Лимит кэша", "Не удалось удалить старый сегмент кольца. " + describeError(error)) }
         }
         markers.removeAll { marker in
             !(segments + finalizing).contains(where: { marker.sourceSeconds >= $0.start.seconds && marker.sourceSeconds < $0.end.seconds }) &&
@@ -846,14 +1071,24 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
     }
 
     // Runs the real encoder and ring without requiring screen permissions.
-    func beginTest(seconds: Double, audio: Bool = false, microphone: Bool = false, microphoneCleanup: Bool = false) throws {
+    func beginTest(seconds: Double, audio: Bool = false, microphone: Bool = false, microphoneCleanup: Bool = false, encoding: CaptureEncodingOptions = .init(), masks: [RecordingMask] = []) throws {
         try queue.sync {
             segmentLength = 1
-            try prepare(width: 320, height: 180, fps: 30, bitrate: 600_000, audio: audio, microphone: microphone, microphoneCleanup: microphoneCleanup, seconds: seconds)
+            try prepare(width: 320, height: 180, fps: 30, bitrate: 600_000, audio: audio, microphone: microphone, microphoneCleanup: microphoneCleanup, seconds: seconds, encoding: encoding, masks: masks)
         }
     }
     func testFrame(_ pixel: CVPixelBuffer, at time: CMTime) {
-        queue.sync { latestPixel = pixel; tick(at: time) }
+        queue.sync {
+            do {
+                if recordingMasks.isEmpty { latestPixel = pixel }
+                else {
+                    guard let owned = try ownedFrames.copy(pixel) else { return }
+                    try RecordingMaskProcessor.apply(recordingMasks, to: owned)
+                    latestPixel = owned
+                }
+                tick(at: time)
+            } catch { onDiagnostic?(.error, "Приватные области", describeError(error)); fail(error.localizedDescription) }
+        }
     }
     func testAudio(_ sample: CMSampleBuffer, microphone: Bool = false) { queue.sync { appendAudio(sample, microphone: microphone) } }
     func testStats() -> BufferStats {
@@ -865,6 +1100,18 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
         }
     }
     func testAdoptStream(_ capture: SCStream) { queue.sync { stream = capture } }
+    func testAdoptApplicationAudioStream(_ capture: SCStream?, processes: Set<pid_t> = [], display: CGDirectDisplayID? = nil) {
+        queue.sync {
+            usesApplicationAudio = true; applicationAudioStream = capture; applicationAudioStreamStarted = false; applicationAudioStreamStarting = false
+            applicationAudioProcesses = processes; applicationAudioDisplay = display
+        }
+    }
+    func testReconcileApplicationAudio(processes: Set<pid_t>, display: CGDirectDisplayID) async -> Bool {
+        let id = queue.sync { sessionID }
+        return await reuseApplicationAudioStream(processes: processes, display: display, warning: nil, session: id)
+    }
+    func testApplicationAudioStreamStarted() -> Bool { queue.sync { applicationAudioStreamStarted } }
+    func testApplicationAudioWarning() -> String? { queue.sync { applicationAudioWarning } }
     func testTick(at time: CMTime) { queue.sync { tick(at: time) } }
 }
 

@@ -6,15 +6,17 @@ import AVKit
 struct FullSizePlayer: NSViewRepresentable {
     let player: AVPlayer?
     let title: String
+    var editor: PlayerEditingState? = nil
 
     func makeNSView(context: Context) -> FullSizePlayerHost {
-        FullSizePlayerHost(player: player, title: title)
+        FullSizePlayerHost(player: player, title: title, editor: editor)
     }
     func updateNSView(_ view: FullSizePlayerHost, context: Context) {
-        view.update(player: player, title: title)
+        view.update(player: player, title: title, editor: editor)
     }
     static func dismantleNSView(_ view: FullSizePlayerHost, coordinator: ()) {
         view.presentation.close(returnFocus: false)
+        view.editor?.detachHost(view)
         view.playerView.player = nil
     }
 }
@@ -24,9 +26,12 @@ struct FullSizePlayer: NSViewRepresentable {
     let expandButton = NSButton()
     let presentation = FullSizePlayerPresentation()
     private(set) var videoTitle: String
+    private(set) var editor: PlayerEditingState?
+    static let entryBarHeight: CGFloat = 42
 
-    init(player: AVPlayer?, title: String) {
+    init(player: AVPlayer?, title: String, editor: PlayerEditingState? = nil) {
         videoTitle = title
+        self.editor = editor
         super.init(frame: .zero)
         wantsLayer = true; layer?.backgroundColor = NSColor.black.cgColor
         playerView.controlsStyle = .floating
@@ -34,9 +39,10 @@ struct FullSizePlayer: NSViewRepresentable {
         playerView.showsFullScreenToggleButton = false
         playerView.player = player
         expandButton.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: "На весь экран")
-        expandButton.imagePosition = .imageOnly
-        expandButton.bezelStyle = .regularSquare
-        expandButton.isBordered = false
+        expandButton.title = "На весь экран"
+        expandButton.imagePosition = .imageLeading
+        expandButton.bezelStyle = .rounded
+        expandButton.isBordered = true
         expandButton.wantsLayer = true
         expandButton.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.7).cgColor
         expandButton.layer?.cornerRadius = 7
@@ -49,26 +55,29 @@ struct FullSizePlayer: NSViewRepresentable {
         addSubview(expandButton)
         NSLayoutConstraint.activate([
             expandButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            expandButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
-            expandButton.widthAnchor.constraint(equalToConstant: 36),
+            expandButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+            expandButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 142),
             expandButton.heightAnchor.constraint(equalToConstant: 30)
         ])
         restoreInlinePlayer()
         expandButton.isEnabled = player != nil
+        editor?.attachHost(self)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func update(player: AVPlayer?, title: String) {
+    func update(player: AVPlayer?, title: String, editor: PlayerEditingState? = nil) {
         if playerView.player !== player {
             presentation.close(returnFocus: false)
             playerView.player = player
         }
         videoTitle = title
+        if self.editor !== editor { self.editor?.detachHost(self); self.editor = editor }
+        editor?.attachHost(self)
         expandButton.isEnabled = player != nil
     }
     @objc private func expand() { presentation.present(self) }
 
-    func movePlayer(to container: NSView) {
+    func movePlayer(to container: NSView, topInset: CGFloat = 0, bottomInset: CGFloat = 0) {
         guard playerView.superview !== container else { return }
         playerView.removeFromSuperview()
         playerView.translatesAutoresizingMaskIntoConstraints = false
@@ -76,8 +85,8 @@ struct FullSizePlayer: NSViewRepresentable {
         NSLayoutConstraint.activate([
             playerView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             playerView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            playerView.topAnchor.constraint(equalTo: container.topAnchor),
-            playerView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+            playerView.topAnchor.constraint(equalTo: container.topAnchor, constant: topInset),
+            playerView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -(container === self ? Self.entryBarHeight : bottomInset))
         ])
     }
     func restoreInlinePlayer() { movePlayer(to: self) }
@@ -116,6 +125,7 @@ struct FullSizePlayer: NSViewRepresentable {
         panel.onExit = { [weak self] in self?.close() }
 
         let content = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
+        let safeTop = max(0, screen.safeAreaInsets.top)
         let exit = NSButton(title: "Выйти · Esc", target: self, action: #selector(exitFullSize))
         exit.bezelStyle = .rounded
         exit.toolTip = "Вернуться к просмотру в окне"
@@ -125,10 +135,28 @@ struct FullSizePlayer: NSViewRepresentable {
         content.addSubview(exit)
         NSLayoutConstraint.activate([
             exit.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
-            exit.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
+            exit.topAnchor.constraint(equalTo: content.topAnchor, constant: safeTop + 14),
             exit.heightAnchor.constraint(greaterThanOrEqualToConstant: 30)
         ])
-        host.movePlayer(to: content)
+        let editorHeight: CGFloat
+        if let editor = host.editor {
+            editorHeight = 238
+            let controls = NSHostingView(rootView: FullscreenEditingToolbar(editor: editor))
+            controls.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(controls)
+            NSLayoutConstraint.activate([
+                controls.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+                controls.widthAnchor.constraint(lessThanOrEqualToConstant: 1200),
+                controls.leadingAnchor.constraint(greaterThanOrEqualTo: content.leadingAnchor, constant: 20),
+                controls.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -20),
+                controls.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14),
+                controls.heightAnchor.constraint(equalToConstant: editorHeight - 14)
+            ])
+            // A preferred full-width panel, constrained to small displays above.
+            let preferredWidth = controls.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -40)
+            preferredWidth.priority = .defaultHigh; preferredWidth.isActive = true
+        } else { editorHeight = 0 }
+        host.movePlayer(to: content, topInset: safeTop + 58, bottomInset: editorHeight)
         panel.contentView = content
         panel.appearance = NSAppearance(named: .darkAqua)
         self.panel = panel

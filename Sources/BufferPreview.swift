@@ -8,15 +8,14 @@ struct PreviewRange: Hashable {
     var end: Double { Double(lastTick) / 60_000 }
     var duration: Double { end - start }
     init(start: Double, end: Double, duration: Double) throws {
-        let full = start == 0 && abs(end - duration) < 0.001
         guard duration.isFinite, duration > 0, duration < Double(Int64.max / 60_000) - 1,
               start.isFinite, end.isFinite, start >= 0, end <= duration + 0.001,
-              end > start, end - start >= 0.05 || full else {
-            throw SpyError.message("Выберите фрагмент не короче 0,05 секунды в пределах видео.")
+              end > start, end - start >= 1.0 / 60_000 - 0.000000001 else {
+            throw SpyError.message("Выберите фрагмент не короче одного кадра в пределах видео.")
         }
         firstTick = Int64((start * 60_000).rounded())
         lastTick = Int64((min(end, duration) * 60_000).rounded())
-        guard lastTick > firstTick, lastTick - firstTick >= 3000 || full else { throw SpyError.message("Фрагмент слишком короткий.") }
+        guard lastTick > firstTick else { throw SpyError.message("Фрагмент слишком короткий.") }
     }
 }
 
@@ -29,14 +28,16 @@ struct BufferPreview: Identifiable {
     var snapshot: SpySnapshot? = nil
     var separateAudio = false
     var initialMicrophoneEnabled = true
+    var addedMarkers: [ClipMarker] = []
     var momentMarkers: [ClipMarker] {
-        guard let snapshot else { return [] }
-        if let playback {
-            return snapshot.markers.compactMap { marker in
+        let captured: [ClipMarker]
+        if let snapshot, let playback {
+            captured = snapshot.markers.compactMap { marker in
                 playback.sourcePosition(marker.sourceSeconds).map { ClipMarker(id: marker.id, seconds: $0, title: marker.title) }
-            }.sorted { $0.seconds < $1.seconds }
-        }
-        return MarkerTimeline.positions(in: snapshot)
+            }
+        } else if let snapshot { captured = MarkerTimeline.positions(in: snapshot) }
+        else { captured = [] }
+        return (captured + addedMarkers).sorted { $0.seconds < $1.seconds }
     }
     var savedURL: URL?
     var savedRanges: [PreviewRange: URL] = [:]
@@ -104,6 +105,13 @@ extension AppModel {
                 throw SpyError.message("Обновление прервано. Прежний снимок остаётся открыт.")
             }
             replacement.initialMicrophoneEnabled = microphoneEnabled
+            if previous.snapshot?.captureSessionID == replacement.snapshot?.captureSessionID,
+               let oldPlayback = previous.playback, let newPlayback = replacement.playback {
+                replacement.addedMarkers = previous.addedMarkers.compactMap { marker in
+                    guard let source = oldPlayback.sourceTime(marker.seconds), let position = newPlayback.sourcePosition(source) else { return nil }
+                    return ClipMarker(id: marker.id, seconds: position, title: marker.title)
+                }
+            }
             bufferPreview = replacement
             candidate = nil
             do { try FileManager.default.removeItem(at: previous.directory) }
@@ -145,7 +153,10 @@ extension AppModel {
         let range = try PreviewRange(start: start, end: end ?? preview.clip.duration, duration: preview.clip.duration)
         let fullRange = try PreviewRange(start: 0, end: preview.clip.duration, duration: preview.clip.duration)
         let entireBuffer = range == fullRange
-        if let savedURL = (microphoneEnabled ? current.savedRanges : current.mutedSavedRanges)[range], FileManager.default.fileExists(atPath: savedURL.path) { return savedURL }
+        if let savedURL = (microphoneEnabled ? current.savedRanges : current.mutedSavedRanges)[range], FileManager.default.fileExists(atPath: savedURL.path) {
+            storeMarkers(MarkerTimeline.selected(current.momentMarkers, start: range.start, end: range.end), for: savedURL)
+            return savedURL
+        }
         guard !saving, !shuttingDown else { throw SpyError.message("Дождитесь завершения текущей операции.") }
         saving = true
         defer { saving = false; refreshDisk(); Task { await reconcilePendingChanges() } }
@@ -166,7 +177,7 @@ extension AppModel {
                 try await ClipTrimmer.export(source: preview.clip.url, start: range.start, end: range.end, to: partial)
             }
             try FileManager.default.moveItem(at: partial, to: destination)
-            storeMarkers(MarkerTimeline.selected(preview.momentMarkers, start: range.start, end: range.end), for: destination)
+            storeMarkers(MarkerTimeline.selected(current.momentMarkers, start: range.start, end: range.end), for: destination)
             if microphoneEnabled { bufferPreview?.savedRanges[range] = destination }
             else { bufferPreview?.mutedSavedRanges[range] = destination }
             if entireBuffer && microphoneEnabled { bufferPreview?.savedURL = destination }
@@ -197,16 +208,17 @@ struct BufferPreviewSheet: View {
     let preview: BufferPreview
     @ObservedObject var model: AppModel
     @State private var player: AVPlayer?
+    @StateObject private var editor = PlayerEditingState()
     @State private var audioControls: VideoAudioControls?
     @State private var microphoneEnabled = true
     @State private var observation: NSKeyValueObservation?
-    @State private var timeObservation: Any?
-    @State private var boundaryObservation: Any?
     @State private var playbackError: String?
     @State private var saveError: String?
     @State private var start: Double = 0
     @State private var end: Double
-    @State private var currentTime: Double = 0
+    private var currentTime: Double { editor.currentTime }
+    private var frameStep: Double { max(1.0 / 60_000, editor.frameDuration) }
+    private var momentMarkers: [ClipMarker] { model.bufferPreview?.id == preview.id ? model.bufferPreview!.momentMarkers : preview.momentMarkers }
     init(preview: BufferPreview, model: AppModel) {
         self.preview = preview
         self.model = model
@@ -252,14 +264,22 @@ struct BufferPreviewSheet: View {
                     .font(.system(size: 9, weight: .semibold)).tracking(0.8)
                     .foregroundStyle(savedURL == nil ? Theme.muted : Theme.green)
             }.padding(20)
-            FullSizePlayer(player: player, title: "Просмотр буфера").frame(height: 270)
+            HStack {
+                Label("Предпросмотр видео", systemImage: "play.rectangle").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                Spacer()
+                Button { editor.openFullScreen() } label: { Label("На весь экран", systemImage: "arrow.up.left.and.arrow.down.right") }
+                    .buttonStyle(.borderedProminent).disabled(!editor.canOpenFullScreen)
+                    .accessibilityIdentifier("Spy.BufferPreview.FullScreen")
+            }.padding(.horizontal, 20).padding(.bottom, 10)
+            FullSizePlayer(player: player, title: "Просмотр буфера", editor: editor).frame(height: 290)
+            FramePlaybackToolbar(editor: editor).padding(.horizontal, 20).padding(.top, 8)
             if let audioControls {
                 VideoMicrophoneView(controls: audioControls, onChange: { microphoneEnabled = $0 })
                     .padding(.horizontal, 20).padding(.top, 10).disabled(model.saving)
             }
             TimelineThumbnailStrip(asset: preview.asset, assetID: preview.id.uuidString, duration: duration, selectionStart: start, selectionEnd: end, onSeek: seek)
                 .padding(.horizontal, 20).padding(.top, 12)
-            MomentMarkerStrip(markers: preview.momentMarkers, onSeek: seek).padding(.horizontal, 20)
+            MomentMarkerStrip(markers: momentMarkers, onSeek: seek).padding(.horizontal, 20)
             selectionControls.padding(.horizontal, 20).padding(.vertical, 12)
             VStack(alignment: .leading, spacing: 12) {
                 if let playbackError { Text(playbackError).foregroundStyle(Theme.danger).font(.system(size: 12)) }
@@ -285,7 +305,7 @@ struct BufferPreviewSheet: View {
                             Image(systemName: savedURL == nil ? "square.and.arrow.down" : "checkmark")
                             Text(savedURL != nil ? "Сохранено" : model.preparingBufferPreview ? "Обновляю…" : model.saving ? "Сохраняется…" : entireBuffer ? "Сохранить видео" : "Сохранить фрагмент")
                         }
-                    }.buttonStyle(.borderedProminent).disabled(model.saving || savedURL != nil || range == nil)
+                    }.buttonStyle(.borderedProminent).disabled(model.saving || !editor.canSave || savedURL != nil || range == nil)
                 }.buttonStyle(.bordered)
             }.padding(20)
         }
@@ -293,7 +313,7 @@ struct BufferPreviewSheet: View {
         .preferredColorScheme(.dark).tint(Theme.accent).interactiveDismissDisabled(model.saving)
         .task(id: preview.id) {
             releasePlayer()
-            start = 0; end = preview.clip.duration; currentTime = 0
+            start = 0; end = preview.clip.duration
             playbackError = nil; saveError = nil
             microphoneEnabled = preview.initialMicrophoneEnabled
             let previewID = preview.id
@@ -308,12 +328,18 @@ struct BufferPreviewSheet: View {
                 audioControls = sound; item = sound.item
                 player = AVPlayer(playerItem: item)
                 if model.previewMode { player?.isMuted = true }
-                timeObservation = player?.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main) { time in
-                    Task { @MainActor in
-                        guard model.bufferPreview?.id == previewID else { return }
-                        if time.isNumeric { currentTime = max(0, min(duration, time.seconds)) }
-                    }
-                }
+                editor.configure(player: player, duration: preview.clip.duration, audioControls: sound,
+                    rangeStart: start, rangeEnd: end, markers: momentMarkers,
+                    onRangeChanged: { first, last in start = first; end = last; saveError = nil },
+                    onMicrophoneChanged: { microphoneEnabled = $0 },
+                    onAddMarker: { time in
+                        model.addBufferPreviewMarker(previewID, at: time)
+                        editor.setMarkers(model.bufferPreview?.momentMarkers ?? [])
+                    },
+                    onSave: { first, last, microphone in
+                        let url = try await model.saveBufferPreview(preview, start: first, end: last, microphoneEnabled: microphone)
+                        return "Сохранено · " + url.lastPathComponent
+                    })
                 observation = item.observe(\.status, options: [.initial, .new]) { item, _ in
                     guard item.status == .failed, let error = item.error else { return }
                     Task { @MainActor in
@@ -322,7 +348,7 @@ struct BufferPreviewSheet: View {
                         model.journal.record(.error, "Воспроизведение буфера", describeError(error))
                     }
                 }
-                setBoundary(); player?.play()
+                player?.play()
             } catch {
                 if !Task.isCancelled {
                     playbackError = error.localizedDescription
@@ -330,15 +356,15 @@ struct BufferPreviewSheet: View {
                 }
             }
         }
-        .onChange(of: start) { _, _ in saveError = nil; setBoundary() }
-        .onChange(of: end) { _, _ in saveError = nil; setBoundary() }
+        .onChange(of: start) { _, _ in saveError = nil; editor.setRange(start: start, end: end) }
+        .onChange(of: end) { _, _ in saveError = nil; editor.setRange(start: start, end: end) }
+        .onChange(of: momentMarkers) { _, value in editor.setMarkers(value) }
         .onDisappear { releasePlayer() }
     }
 
     private func releasePlayer() {
+        editor.detach()
         player?.pause()
-        if let timeObservation { player?.removeTimeObserver(timeObservation); self.timeObservation = nil }
-        if let boundaryObservation { player?.removeTimeObserver(boundaryObservation); self.boundaryObservation = nil }
         observation?.invalidate(); observation = nil
         player = nil; audioControls = nil
     }
@@ -348,40 +374,33 @@ struct BufferPreviewSheet: View {
             HStack {
                 Label("Выбрать момент", systemImage: "scissors").font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Text(preciseClock(max(0, end - start))).monospacedDigit().foregroundStyle(Theme.accent)
-                Button("Весь буфер") { start = 0; end = duration; seek(0) }.controlSize(.small)
+                Text(frameClock(max(0, end - start))).monospacedDigit().foregroundStyle(Theme.accent)
+                Button("Весь буфер") { editor.selectAll(); seek(0) }.controlSize(.small)
             }
             HStack(spacing: 10) {
                 Text("Начало").frame(width: 48, alignment: .leading)
-                Slider(value: Binding(get: { start }, set: { start = min($0, max(0, end - 0.05)); seek(start) }), in: 0...duration, step: 0.1)
+                Slider(value: Binding(get: { start }, set: { editor.setStart($0) }), in: 0...duration, step: frameStep)
                     .accessibilityLabel("Начало фрагмента буфера")
-                Text(preciseClock(start)).monospacedDigit().frame(width: 65)
-                Button("Из плеера") { start = min(currentTime, max(0, end - 0.05)) }.controlSize(.small)
+                Text(frameClock(start)).monospacedDigit().frame(width: 85)
+                Button("Из плеера") { editor.setStartAtPlayhead() }.controlSize(.small)
             }
             HStack(spacing: 10) {
                 Text("Конец").frame(width: 48, alignment: .leading)
-                Slider(value: Binding(get: { end }, set: { end = min(duration, max($0, min(duration, start + 0.05))); seek(end) }), in: 0...duration, step: 0.1)
+                Slider(value: Binding(get: { end }, set: { editor.setEnd($0) }), in: 0...duration, step: frameStep)
                     .accessibilityLabel("Конец фрагмента буфера")
-                Text(preciseClock(end)).monospacedDigit().frame(width: 65)
-                Button("Из плеера") { end = max(currentTime, min(duration, start + 0.05)) }.controlSize(.small)
+                Text(frameClock(end)).monospacedDigit().frame(width: 85)
+                Button("Из плеера") { editor.setEndAtPlayhead() }.controlSize(.small)
             }
             HStack {
-                Text("В плеере: " + preciseClock(currentTime)).foregroundStyle(Theme.muted).monospacedDigit()
+                Text("В плеере: " + frameClock(currentTime)).foregroundStyle(Theme.muted).monospacedDigit()
                 Spacer()
                 Button("Просмотреть фрагмент") {
-                    player?.seek(to: CMTime(seconds: start, preferredTimescale: 60_000), toleranceBefore: .zero, toleranceAfter: .zero) { done in
-                        Task { @MainActor in if done { player?.play() } }
-                    }
+                    editor.seek(start, resume: true)
                 }.controlSize(.small)
             }
-        }.font(.system(size: 11)).buttonStyle(.bordered).disabled(model.saving || duration < 0.05)
+        }.font(.system(size: 11)).buttonStyle(.bordered).disabled(model.saving || player == nil)
     }
     private func seek(_ seconds: Double) {
-        player?.pause()
-        player?.seek(to: CMTime(seconds: max(0, min(duration, seconds)), preferredTimescale: 60_000), toleranceBefore: .zero, toleranceAfter: .zero)
-    }
-    private func setBoundary() {
-        if let boundaryObservation { player?.removeTimeObserver(boundaryObservation) }
-        boundaryObservation = player?.addBoundaryTimeObserver(forTimes: [NSValue(time: CMTime(seconds: end, preferredTimescale: 60_000))], queue: .main) { [weak player] in player?.pause() }
+        editor.seek(seconds)
     }
 }

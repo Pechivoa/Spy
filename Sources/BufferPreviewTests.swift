@@ -55,6 +55,9 @@ import AVFoundation
         let gapped = SpySnapshot(directory: pinned.directory, urls: pinned.urls, requestedSeconds: 1.5, sourceIntervals: [SpySourceInterval(start: 100, end: 101), SpySourceInterval(start: 105, end: 106)])
         let gappedPlayback = try await BufferPlayback.prepare(gapped, levels: AudioLevels())
         try SelfTest.require(abs((gappedPlayback.sourcePosition(100.75) ?? -1) - 0.25) < 0.02 && abs((gappedPlayback.sourcePosition(105.25) ?? -1) - 0.75) < 0.02 && gappedPlayback.sourcePosition(103) == nil, "Marker mapping honors an initially clipped segment and clock gaps")
+        try SelfTest.require(abs((gappedPlayback.sourceTime(0.25) ?? -1) - 100.75) < 0.02 &&
+            abs((gappedPlayback.sourceTime(0.75) ?? -1) - 105.25) < 0.02 && gappedPlayback.sourceTime(-1) == nil,
+            "Playhead marker times map back through clipped sources and privacy clock gaps")
         print("PASS: metadata-only preview, no pre-exported movie, 60 decoded frames, frozen source gains, composition thumbnails and marker timing")
 
         await model.previewBuffer()
@@ -102,13 +105,34 @@ import AVFoundation
         try SelfTest.require(!fragmentPackets.isEmpty && fragmentPackets.isSubset(of: sourcePackets), "Fragment preserves the original compressed H.264 packets")
         let sameFragment = try await model.saveBufferPreview(preview, start: 0.400000001, end: 1.400000001)
         try SelfTest.require(sameFragment == fragment && model.clips.count == 2, "Sub-tick range differences cannot create accidental duplicates")
-        for (badStart, badEnd) in [(Double.nan, 1.0), (0.0, Double.infinity), (-0.1, 1.0), (1.5, 1.4), (0.0, 3.0), (0.5, 0.51)] {
+        for (badStart, badEnd) in [(Double.nan, 1.0), (0.0, Double.infinity), (-0.1, 1.0), (1.5, 1.4), (0.0, 3.0), (0.5, 0.500001)] {
             var rejected = false
             do { _ = try await model.saveBufferPreview(preview, start: badStart, end: badEnd) } catch { rejected = true }
             try SelfTest.require(rejected && !model.saving && model.clips.count == 2, "Invalid fragment ranges fail without publishing files")
         }
+        let marker = model.addBufferPreviewMarker(preview.id, at: 0.5)
+        try SelfTest.require(marker != nil, "A frozen preview accepts a playhead marker after capture stops")
+        let fullWithMarker = try await model.saveBufferPreview(preview)
+        let fragmentWithMarker = try await model.saveBufferPreview(preview, start: 0.4, end: 1.4)
+        try SelfTest.require(fullWithMarker == saved && fragmentWithMarker == fragment &&
+            model.metadata.get(saved).markers.contains(where: { $0.id == marker?.id }) &&
+            model.metadata.get(fragment).markers.contains(where: { $0.id == marker?.id && abs($0.seconds - 0.1) < 0.0001 }),
+            "Saving an existing range refreshes added marker metadata without duplicating video")
+        let singleFrame = try await model.saveBufferPreview(preview, start: 0.4, end: 0.4 + 1.0 / 30, microphoneEnabled: false)
+        let frameAsset = AVURLAsset(url: singleFrame)
+        let frameTrack = try await frameAsset.loadTracks(withMediaType: .video)[0]
+        let frameReader = try AVAssetReader(asset: frameAsset)
+        let frameOutput = AVAssetReaderTrackOutput(track: frameTrack, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+        frameReader.add(frameOutput)
+        try SelfTest.require(frameReader.startReading(), "One-frame selection opens for decoding")
+        var oneFrameCount = 0
+        while frameOutput.copyNextSampleBuffer() != nil { oneFrameCount += 1 }
+        let oneFrameDuration = try await frameTrack.load(.timeRange).duration.seconds
+        try SelfTest.require(frameReader.status == .completed && oneFrameCount == 1 && abs(oneFrameDuration - 1.0 / 30) < 0.001,
+            "A single selected source frame exports and decodes at its actual frame duration")
+        print("PASS: playhead markers persist in existing saves and single-frame export decodes exactly one frame")
         let tiny = try PreviewRange(start: 0, end: 1.0 / 60, duration: 1.0 / 60)
-        try SelfTest.require(tiny.duration > 0, "A full buffer shorter than the minimum fragment still remains saveable")
+        try SelfTest.require(tiny.duration > 0, "A single-frame full buffer remains saveable")
         try FileManager.default.copyItem(at: fragment, to: directory.appendingPathComponent("preview-fragment.mov"))
         let afterTrimming = try pinned.urls.map { try Data(contentsOf: $0) }
         try SelfTest.require(afterTrimming == frozen, "Saving selected moments does not modify the full preview")
@@ -118,6 +142,7 @@ import AVFoundation
         try FileManager.default.copyItem(at: saved, to: directory.appendingPathComponent("preview-saved.mov"))
         print("PASS: recording continues, pinned segments survive ring rotation/stop, offline retry, frozen video/audio export, no duplicates")
 
+        try await shortVariableFrame(directory: directory.appendingPathComponent("short-vfr"))
         try await longPreviewFixture(source: saved, directory: directory)
 
         let discard = AppModel(preview: true)
@@ -151,6 +176,44 @@ import AVFoundation
         print("PASS: discard and quit cleanup, silent preview, empty-buffer error with no orphaned exports")
     }
 
+    private static func shortVariableFrame(directory: URL) async throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let model = AppModel(preview: true)
+        defer { try? FileManager.default.removeItem(at: model.libraryURL.deletingLastPathComponent()) }
+        model.saveBufferOnExit = false
+        model.minutes = 0.5
+        try model.engine.beginTest(seconds: 30)
+        model.recording = true
+        let times = [0.0, 0.01, 0.03] + (0..<30).map { 0.05 + Double($0) / 30 }
+        for (index, time) in times.enumerated() {
+            model.engine.testFrame(try SelfTest.pixel(frame: index), at: CMTime(seconds: 100 + time, preferredTimescale: 60_000))
+            try await Task.sleep(nanoseconds: 8_000_000)
+        }
+        model.stats = model.engine.testStats()
+        await model.previewBuffer()
+        await model.stop()
+        guard let preview = model.bufferPreview else { throw SpyError.message("TEST FAILED: Short VFR preview missing") }
+        defer { model.closeBufferPreview() }
+        let entire = try await model.saveBufferPreview(preview)
+        let selected = try await model.saveBufferPreview(preview, start: 0, end: 0.01)
+        let trimmed = directory.appendingPathComponent("short-frame.mov")
+        try await ClipTrimmer.export(source: entire, start: 0, end: 0.01, to: trimmed)
+        for url in [selected, trimmed] {
+            let asset = AVURLAsset(url: url)
+            let track = try await asset.loadTracks(withMediaType: .video)[0]
+            let reader = try AVAssetReader(asset: asset)
+            let output = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+            reader.add(output)
+            try SelfTest.require(reader.startReading(), "A 10ms VFR frame opens for decoding")
+            var count = 0
+            while output.copyNextSampleBuffer() != nil { count += 1 }
+            let span = try await track.load(.timeRange).duration.seconds
+            try SelfTest.require(reader.status == .completed && count == 1 && abs(span - 0.01) < 0.0001,
+                "Both buffer save and library trim preserve a genuine 10ms source frame below nominal 60FPS duration")
+        }
+        print("PASS: genuine 10ms variable-duration frame exports and decodes once through buffer save and library trim")
+    }
+
     private static func refreshedSnapshots(directory: URL) async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let model = AppModel(preview: true)
@@ -177,6 +240,7 @@ import AVFoundation
         }
         let originalData = try originalSnapshot.urls.map { try Data(contentsOf: $0) }
         let originalDecoded = try await decodedPreview(asset: original.asset)
+        let previewMarker = model.addBufferPreviewMarker(original.id, at: 0.5)
         let savedBeforeRefresh = try await model.saveBufferPreview(original, start: 0.2, end: 1.2, microphoneEnabled: false)
         try await feed(60..<120)
         await model.openBufferPreview()
@@ -188,6 +252,8 @@ import AVFoundation
         try SelfTest.require(unchangedPins == originalData, "New capture frames never overwrite a frozen preview's pinned sources")
 
         let refreshed = try await model.refreshBufferPreview(original, microphoneEnabled: false)
+        try SelfTest.require(refreshed.momentMarkers.contains(where: { $0.id == previewMarker?.id && abs($0.seconds - 0.5) < 0.001 }),
+            "Refresh preserves playhead markers through the source clock")
         guard let refreshedSnapshot = refreshed.snapshot else { throw SpyError.message("TEST FAILED: Refreshed snapshot missing") }
         let newDecoded = try await decodedPreview(asset: refreshed.asset)
         try SelfTest.require(refreshed.id != original.id && abs(refreshed.clip.duration - 4) < 0.06 &&

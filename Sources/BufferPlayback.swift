@@ -113,6 +113,12 @@ final class BufferPlayback {
         return nil
     }
 
+    func sourceTime(_ previewSeconds: Double) -> Double? {
+        guard previewSeconds.isFinite, previewSeconds >= 0, previewSeconds < duration else { return nil }
+        guard let span = sourceSpans.first(where: { previewSeconds >= $0.previewStart && previewSeconds < $0.previewEnd }) else { return nil }
+        return min(span.sourceEnd, span.sourceStart + previewSeconds - span.previewStart)
+    }
+
     @MainActor func playerItem() -> AVPlayerItem {
         let item = AVPlayerItem(asset: asset)
         let mix = AVMutableAudioMix()

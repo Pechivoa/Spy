@@ -1,6 +1,6 @@
 import AVFoundation
 
-/// Copies H.264 packets, while applying source gains to one mix or separate AAC tracks.
+/// Copies compressed H.264/HEVC video, applying gains to mixed or separate AAC audio.
 enum MixedAudioExporter {
     static func export(_ composition: AVMutableComposition, video: AVAssetTrack, audio: [AVAssetTrack], to destination: URL, volumes: [CMPersistentTrackID: Float] = [:], separate: Bool = false, names: [CMPersistentTrackID: String] = [:], fileType: AVFileType = .mov, progress: @escaping (Float) -> Void) async throws {
         let reader = try AVAssetReader(asset: composition)

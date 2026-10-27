@@ -6,9 +6,9 @@ struct PlayerSheet: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer?
+    @StateObject private var editor = PlayerEditingState()
     @State private var audioControls: VideoAudioControls?
     @State private var microphoneEnabled = true
-    @State private var boundaryObservation: Any?
     @State private var deleteAlert = false
     @State private var rename = false
     @State private var playbackObservation: NSKeyValueObservation?
@@ -18,13 +18,15 @@ struct PlayerSheet: View {
     @State private var result: URL?
     @State private var trimError: String?
     private var current: Clip { model.clips.first(where: { $0.id == clip.id }) ?? clip }
-    private var duration: Double { max(0.05, clip.duration) }
+    private var duration: Double { max(0.001, clip.duration) }
+    private var frameStep: Double { max(1.0 / 60_000, editor.frameDuration) }
+    private var momentMarkers: [ClipMarker] { model.metadata.get(current.url).markers }
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(current.title).font(.system(size: 16, weight: .semibold)).lineLimit(1)
-                    Text("\(preciseClock(clip.duration)) · \(fileSize(clip.bytes))").font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    Text("\(frameClock(clip.duration)) · \(fileSize(clip.bytes))").font(.system(size: 11)).foregroundStyle(Theme.muted)
                 }
                 Spacer()
                 Button { model.toggleFavorite(current) } label: { Image(systemName: current.favorite ? "star.fill" : "star").foregroundStyle(current.favorite ? Color.orange : Color.white) }.help("Избранное")
@@ -35,7 +37,15 @@ struct PlayerSheet: View {
                 Button("Закрыть") { dismiss() }.keyboardShortcut(.cancelAction).disabled(model.saving)
             }.buttonStyle(.bordered).padding(20)
             if let playbackError { Text(playbackError).font(.system(size: 12)).foregroundStyle(Theme.accent).padding(.horizontal, 20).padding(.bottom, 14) }
-            FullSizePlayer(player: player, title: current.title).frame(height: 380)
+            HStack {
+                Label("Просмотр видео", systemImage: "play.rectangle").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                Spacer()
+                Button { editor.openFullScreen() } label: { Label("На весь экран", systemImage: "arrow.up.left.and.arrow.down.right") }
+                    .buttonStyle(.borderedProminent).disabled(!editor.canOpenFullScreen)
+                    .accessibilityIdentifier("Spy.SavedVideo.FullScreen")
+            }.padding(.horizontal, 20).padding(.bottom, 10)
+            FullSizePlayer(player: player, title: current.title, editor: editor).frame(height: 380)
+            FramePlaybackToolbar(editor: editor).padding(.horizontal, 20).padding(.top, 8)
             if let audioControls {
                 VideoMicrophoneView(controls: audioControls, onChange: { microphoneEnabled = $0 }, saveCopy: {
                     player?.pause(); result = nil; trimError = nil
@@ -45,7 +55,7 @@ struct PlayerSheet: View {
                     }
                 }).padding(.horizontal, 20).padding(.top, 10).disabled(model.saving)
             }
-            MomentMarkerStrip(markers: model.metadata.get(current.url).markers, onSeek: seek).padding(.horizontal, 20)
+            MomentMarkerStrip(markers: momentMarkers, onSeek: seek).padding(.horizontal, 20)
             trimControls.padding(20)
         }.frame(width: 900).background(Theme.background).preferredColorScheme(.dark).tint(Theme.accent)
             .task(id: clip.url) {
@@ -65,11 +75,26 @@ struct PlayerSheet: View {
                         model.journal.record(.error, "Воспроизведение видео", clip.url.lastPathComponent + "\n" + describeError(error))
                     }
                 }
-                setBoundary(); player?.play()
+                editor.configure(player: player, duration: clip.duration, audioControls: audioControls,
+                    rangeStart: start, rangeEnd: end, markers: momentMarkers,
+                    onRangeChanged: { first, last in start = first; end = last; trimError = nil },
+                    onMicrophoneChanged: { microphoneEnabled = $0 },
+                    onAddMarker: { time in
+                        model.addPlaybackMarker(current, at: time)
+                        editor.setMarkers(model.metadata.get(current.url).markers)
+                    },
+                    onSave: { first, last, microphone in
+                        let url = try await model.trimClip(clip, start: first, end: last, microphoneEnabled: microphone)
+                        result = url
+                        return "Сохранено · " + url.lastPathComponent
+                    })
+                player?.play()
             }
-            .onChange(of: end) { _, _ in setBoundary() }
+            .onChange(of: start) { _, _ in editor.setRange(start: start, end: end) }
+            .onChange(of: end) { _, _ in editor.setRange(start: start, end: end) }
+            .onChange(of: momentMarkers) { _, value in editor.setMarkers(value) }
             .onDisappear {
-                if let boundaryObservation { player?.removeTimeObserver(boundaryObservation); self.boundaryObservation = nil }
+                editor.detach()
                 playbackObservation?.invalidate(); playbackObservation = nil; player?.pause(); player = nil; audioControls = nil }
             .sheet(isPresented: $rename) { RenameClipSheet(clip: current, model: model) }
             .alert("Переместить видео в Корзину?", isPresented: $deleteAlert) {
@@ -82,19 +107,19 @@ struct PlayerSheet: View {
             HStack {
                 Label("Обрезать момент", systemImage: "scissors").font(.system(size: 15, weight: .semibold))
                 Spacer()
-                Text("Фрагмент: \(preciseClock(max(0, end - start)))").font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.muted)
+                Text("Фрагмент: \(frameClock(max(0, end - start)))").font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.muted)
             }
             HStack(spacing: 12) {
                 Text("Начало").frame(width: 55, alignment: .leading)
-                Slider(value: Binding(get: { start }, set: { start = min($0, max(0, end - 0.05)); seek(start) }), in: 0...duration, step: 0.1).accessibilityLabel("Начало фрагмента")
-                Text(preciseClock(start)).monospacedDigit().frame(width: 70)
-                Button("Из плеера") { start = min(max(0, player?.currentTime().seconds ?? 0), max(0, end - 0.05)) }.controlSize(.small)
+                Slider(value: Binding(get: { start }, set: { editor.setStart($0) }), in: 0...duration, step: frameStep).accessibilityLabel("Начало фрагмента")
+                Text(frameClock(start)).monospacedDigit().frame(width: 90)
+                Button("Из плеера") { editor.setStartAtPlayhead() }.controlSize(.small)
             }.font(.system(size: 12))
             HStack(spacing: 12) {
                 Text("Конец").frame(width: 55, alignment: .leading)
-                Slider(value: Binding(get: { end }, set: { end = max($0, min(duration, start + 0.05)); seek(end) }), in: 0...duration, step: 0.1).accessibilityLabel("Конец фрагмента")
-                Text(preciseClock(end)).monospacedDigit().frame(width: 70)
-                Button("Из плеера") { end = max(min(duration, player?.currentTime().seconds ?? duration), start + 0.05) }.controlSize(.small)
+                Slider(value: Binding(get: { end }, set: { editor.setEnd($0) }), in: 0...duration, step: frameStep).accessibilityLabel("Конец фрагмента")
+                Text(frameClock(end)).monospacedDigit().frame(width: 90)
+                Button("Из плеера") { editor.setEndAtPlayhead() }.controlSize(.small)
             }.font(.system(size: 12))
             if let trimError { Text(trimError).font(.system(size: 11)).foregroundStyle(Theme.accent) }
             HStack {
@@ -103,20 +128,16 @@ struct PlayerSheet: View {
                     Button("Показать") { NSWorkspace.shared.activateFileViewerSelecting([result]) }.buttonStyle(.plain).font(.system(size: 11))
                 } else { Text("Сохранится отдельный ролик. Исходное видео останется в библиотеке.").font(.system(size: 11)).foregroundStyle(Theme.muted) }
                 Spacer()
-                Button("Просмотреть") { seek(start); player?.play() }.buttonStyle(.bordered).controlSize(.small)
+                Button("Просмотреть") { editor.seek(start, resume: true) }.buttonStyle(.bordered).controlSize(.small)
                 Button(model.saving ? "Сохраняется…" : "Сохранить фрагмент") {
                     player?.pause(); result = nil; trimError = nil
                     Task {
                         do { result = try await model.trimClip(clip, start: start, end: end, microphoneEnabled: microphoneEnabled) }
                         catch { trimError = error.localizedDescription }
                     }
-                }.buttonStyle(.borderedProminent).disabled(end - start < 0.05 || clip.duration < 0.05)
+                }.buttonStyle(.borderedProminent).disabled(!editor.canSave || player == nil)
             }
         }.disabled(model.saving)
     }
-    private func setBoundary() {
-        if let boundaryObservation { player?.removeTimeObserver(boundaryObservation) }
-        boundaryObservation = player?.addBoundaryTimeObserver(forTimes: [NSValue(time: CMTime(seconds: end, preferredTimescale: 600))], queue: .main) { [weak player] in player?.pause() }
-    }
-    private func seek(_ seconds: Double) { player?.pause(); player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) }
+    private func seek(_ seconds: Double) { editor.seek(seconds) }
 }

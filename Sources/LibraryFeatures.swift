@@ -79,12 +79,10 @@ enum ClipTrimmer {
     static func export(source: URL, start: Double, end: Double, to destination: URL) async throws {
         let asset = AVURLAsset(url: source)
         let duration = CMTimeGetSeconds(try await asset.load(.duration))
-        guard start.isFinite, end.isFinite, start >= 0, end <= duration + 0.001, end - start >= 0.05 else {
-            throw SpyError.message("Выберите фрагмент длиной не меньше 0,05 секунды в пределах видео.")
-        }
+        let range = try PreviewRange(start: start, end: end, duration: duration)
         guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else { throw SpyError.message("Обрезка видео недоступна.") }
         exporter.outputURL = destination; exporter.outputFileType = .mov
-        exporter.timeRange = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 60_000), duration: CMTime(seconds: end - start, preferredTimescale: 60_000))
+        exporter.timeRange = CMTimeRange(start: CMTime(seconds: range.start, preferredTimescale: 60_000), duration: CMTime(seconds: range.duration, preferredTimescale: 60_000))
         exporter.shouldOptimizeForNetworkUse = true
         await exporter.export()
         guard exporter.status == .completed else {

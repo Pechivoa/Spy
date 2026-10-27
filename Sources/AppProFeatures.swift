@@ -24,6 +24,7 @@ import UniformTypeIdentifiers
             }
         })
         hud.onHide = { [weak self] in self?.hudEnabled = false }
+        hud.onPreview = { [weak self] in Task { await self?.openBufferPreview() } }
         onBattery = PowerMonitor.onBattery(); refreshLoginStatus(); refreshRecoveryFolders()
         powerMonitor = PowerMonitor { [weak self] value in Task { @MainActor in self?.powerChanged(value) } }
         proObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] event in

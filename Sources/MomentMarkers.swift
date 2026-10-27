@@ -93,7 +93,7 @@ struct MomentMarkerStrip: View {
                     Label("Метки", systemImage: "bookmark.fill").foregroundStyle(Theme.muted)
                     ForEach(markers) { marker in
                         Button { onSeek(marker.seconds) } label: {
-                            Text(marker.title + " · " + preciseClock(marker.seconds)).lineLimit(1)
+                            Text(marker.title + " · " + frameClock(marker.seconds)).lineLimit(1)
                         }.buttonStyle(.bordered).controlSize(.small)
                             .accessibilityLabel("Перейти к метке " + marker.title)
                     }

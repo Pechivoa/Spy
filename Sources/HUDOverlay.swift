@@ -40,6 +40,7 @@ struct HUDView: View {
     private var lastVisible: CGRect?
     private var applyingFrame = false
     var onHide: (() -> Void)?
+    var onPreview: (() -> Void)?
     init(preferences: UserDefaults = .standard) { self.preferences = preferences; super.init() }
     static func frame(visible: CGRect, corner: HUDCorner, size: CGSize? = nil) -> CGRect {
         let size = size ?? defaultSize
@@ -70,6 +71,7 @@ struct HUDView: View {
             view.autoresizingMask = [.width, .height]
             view.onResize = { [weak self] size in self?.setSize(size) }
             view.onHide = { [weak self] in self?.onHide?() }
+            view.onPreview = { [weak self] in self?.onPreview?() }
             view.onReset = { [weak self] in self?.resetPosition() }
             popup.contentView = view
             surface = view
@@ -139,6 +141,7 @@ struct HUDView: View {
         var value = HUDState(recording: true, manual: false, seconds: 0, bytes: 0, battery: false)
         var onResize: ((CGSize) -> Void)?
         var onHide: (() -> Void)?
+        var onPreview: (() -> Void)?
         var onReset: (() -> Void)?
         override var isFlipped: Bool { true }
         override var mouseDownCanMoveWindow: Bool { false }
@@ -160,7 +163,7 @@ struct HUDView: View {
             let text = label as NSString
             let size = text.size(withAttributes: attributes)
             text.draw(in: CGRect(x: 18, y: (bounds.height - size.height) / 2, width: max(0, bounds.width - 23), height: size.height), withAttributes: attributes)
-            toolTip = "\(value.manual ? "Ручная запись" : "Повтор активен") · \(clockText(value.seconds)) · \(fileSize(value.bytes)). Перетащите индикатор; правый край меняет размер. Правый клик — скрыть."
+            toolTip = "\(value.manual ? "Ручная запись" : "Повтор активен") · \(clockText(value.seconds)) · \(fileSize(value.bytes)). Перетащите индикатор; правый край меняет размер. Правый клик — просмотр буфера и настройки."
             setAccessibilityLabel(toolTip)
         }
         override func resetCursorRects() {
@@ -187,6 +190,9 @@ struct HUDView: View {
         }
         override func rightMouseDown(with event: NSEvent) {
             let menu = NSMenu()
+            let preview = NSMenuItem(title: "Просмотреть буфер", action: #selector(previewBuffer), keyEquivalent: "")
+            preview.target = self; menu.addItem(preview)
+            menu.addItem(.separator())
             for (title, action) in [("Минимальный размер", #selector(makeMinimum)), ("Маленький размер", #selector(makeDefault)), ("Вернуть в угол", #selector(reset))] {
                 let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; menu.addItem(item)
             }
@@ -198,5 +204,6 @@ struct HUDView: View {
         @objc private func makeDefault() { onResize?(HUDOverlay.defaultSize) }
         @objc private func reset() { onReset?() }
         @objc private func hideIndicator() { onHide?() }
+        @objc private func previewBuffer() { onPreview?() }
     }
 }

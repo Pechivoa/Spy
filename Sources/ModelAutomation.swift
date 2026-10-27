@@ -6,7 +6,9 @@ import Foundation
         RecordingConfig(displayID: displayID, quality: recording ? (recordingQuality ?? effectiveQuality) : effectiveQuality, audio: systemAudio,
             microphone: microphone, seconds: max(30, effectiveMinutes * 60),
             windowID: captureMode == .window ? windowID : nil, microphoneID: microphoneID.isEmpty ? nil : microphoneID,
-            excludedBundleIDs: privacy.excludedBundleIDs, microphoneCleanup: microphoneCleanup)
+            excludedBundleIDs: privacy.excludedBundleIDs, microphoneCleanup: microphoneCleanup,
+            applicationAudioMode: applicationAudio.mode, applicationAudioBundleIDs: applicationAudio.bundleIDs,
+            encoding: captureTuning.encoding, masks: captureTuning.enabledMasks)
     }
 
     func setupAutomation() {

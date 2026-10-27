@@ -53,7 +53,7 @@ struct SpyApp: App {
                 Button(model.recording ? "Остановить буфер" : "Включить буфер") { Task { await model.toggleRecording() } }.disabled(model.diagnosticsBusy || model.busy || model.saving)
                 Button(model.manualRecording ? "Завершить ручную запись" : "Начать ручную запись") { Task { await model.toggleManual() } }.disabled(model.diagnosticsBusy || model.busy || model.saving)
                 Button("Сохранить повтор") { Task { await model.saveSpy() } }.disabled(!model.canSave)
-                Button("Просмотреть буфер · " + model.shortcuts.preview.label) { Task { await model.openBufferPreview() } }.disabled(!model.canPreviewBuffer)
+                Button("Просмотреть буфер · " + model.shortcuts.preview.label) { Task { await model.openBufferPreview() } }.disabled(!model.canPreviewBuffer && model.bufferPreview == nil)
                 Button("Добавить метку · " + model.shortcuts.marker.label) { model.addMomentMarker() }.disabled(!model.canAddMomentMarker)
                 ForEach(ShortcutAction.quick) { action in
                     Button(action.title) { Task { await model.saveSpy(seconds: action.seconds) } }.disabled(!model.canSave)
@@ -109,8 +109,8 @@ struct SpyMenu: View {
         Button(model.saving ? "Сохраняется…" : "Сохранить повтор · " + model.shortcuts.save.label) { Task { await model.saveSpy() } }.disabled(!model.canSave)
         Button(model.preparingBufferPreview ? "Подготовка просмотра…" : "Просмотреть буфер") {
             openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
-            Task { await model.previewBuffer() }
-        }.disabled(!model.canPreviewBuffer)
+            Task { await model.openBufferPreview() }
+        }.disabled(!model.canPreviewBuffer && model.bufferPreview == nil)
         Button("Добавить метку · " + model.shortcuts.marker.label) { model.addMomentMarker() }.disabled(!model.canAddMomentMarker)
         ForEach(ShortcutAction.quick) { action in
             Button(action.title + " · " + model.shortcuts[action].label) { Task { await model.saveSpy(seconds: action.seconds) } }.disabled(!model.canSave)
@@ -225,7 +225,7 @@ struct ContentView: View {
                     Text("\(fileSize(model.freeSpace)) свободно").font(.system(size: 11)).foregroundStyle(Theme.muted)
                 }
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(Theme.panel, in: RoundedRectangle(cornerRadius: 14))
-            Text("SPY FOR MAC  /  1.10.1").font(.system(size: 9, weight: .medium)).tracking(1.4).foregroundStyle(Theme.muted.opacity(0.6)).padding(.top, 20).padding(.bottom, 24)
+            Text("SPY FOR MAC  /  1.11.0").font(.system(size: 9, weight: .medium)).tracking(1.4).foregroundStyle(Theme.muted.opacity(0.6)).padding(.top, 20).padding(.bottom, 24)
         }.padding(.horizontal, 16).frame(width: 210).background(Theme.sidebar)
             .overlay(alignment: .trailing) { Rectangle().fill(Theme.border).frame(width: 1) }
     }
@@ -309,7 +309,7 @@ struct ContentView: View {
                         .foregroundStyle(model.canSave ? .white : Theme.muted).background(model.canSave ? Theme.accent : Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border))
                 }.buttonStyle(.plain).disabled(!model.canSave)
-                Button { Task { await model.previewBuffer() } } label: {
+                Button { Task { await model.openBufferPreview() } } label: {
                     HStack(spacing: 8) {
                         if model.preparingBufferPreview { ProgressView().controlSize(.small) }
                         else { Image(systemName: "play.rectangle") }
@@ -317,7 +317,7 @@ struct ContentView: View {
                     }.frame(height: 20).padding(.horizontal, 13).padding(.vertical, 12)
                         .foregroundStyle(model.canPreviewBuffer ? .white : Theme.muted)
                         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
-                }.buttonStyle(.plain).disabled(!model.canPreviewBuffer)
+                }.buttonStyle(.plain).disabled(!model.canPreviewBuffer && model.bufferPreview == nil)
                     .help("Открыть видео из буфера, затем решить, сохранять ли его")
                 Spacer()
                 Text(model.shortcuts.toggle.label + " — вкл. / выкл.").font(.system(size: 10)).foregroundStyle(Theme.muted)
@@ -341,6 +341,7 @@ struct ContentView: View {
                         .disabled(!model.microphoneAvailable)
                 }
                 AudioControlsView(model: model)
+                ApplicationAudioPickerView(model: model)
                 if !model.microphoneAvailable { Text("Запись микрофона доступна на macOS 15 и новее.").font(.system(size: 10)).foregroundStyle(Theme.muted) }
             }
         }.padding(24).background(Theme.panel, in: RoundedRectangle(cornerRadius: 18)).overlay(RoundedRectangle(cornerRadius: 18).stroke(Theme.border))
@@ -436,6 +437,12 @@ struct ContentView: View {
 
     private var settingsPanel: some View {
         VStack(alignment: .leading, spacing: 22) {
+            CaptureTuningSettingsView(settings: model.captureTuning,
+                locked: model.recording || model.busy || model.saving || model.diagnosticsBusy,
+                previewLoader: { try await model.captureMaskPreview() })
+            Divider().overlay(Theme.border)
+            ApplicationAudioPickerView(model: model)
+            Divider().overlay(Theme.border)
             DiagnosticsView(controller: model.recordingDiagnostics, onRun: { Task { await model.runRecordingCheck() } })
                 .disabled(model.busy || model.saving || model.shuttingDown)
             AutoMomentClipSettingsView(controller: model.autoMomentClips)
@@ -491,7 +498,7 @@ struct ContentView: View {
             Image(systemName: "lock.shield").font(.system(size: 10))
             Text("Видео хранятся только на этом Mac").font(.system(size: 10))
             Spacer()
-            Text("H.264 + AAC  ·  MOV").font(.system(size: 9, design: .monospaced))
+            CaptureFormatSummary(settings: model.captureTuning)
         }.foregroundStyle(Theme.muted.opacity(0.7)).padding(.bottom, 4)
     }
 }
@@ -515,7 +522,7 @@ struct ClipCard: View {
                     Image(systemName: "play.fill").font(.system(size: 18)).foregroundStyle(.white)
                         .frame(width: 43, height: 43).background(.black.opacity(0.45), in: Circle())
                 }.frame(height: 135).overlay(alignment: .bottomTrailing) {
-                    Text(clockText(clip.duration)).font(.system(size: 10, weight: .medium, design: .monospaced)).padding(.horizontal, 7).padding(.vertical, 4).background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 5)).padding(9)
+                    Text(clip.duration < 1 ? frameClock(clip.duration) : clockText(clip.duration)).font(.system(size: 10, weight: .medium, design: .monospaced)).padding(.horizontal, 7).padding(.vertical, 4).background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 5)).padding(9)
                 }
             }.buttonStyle(.plain).accessibilityLabel("Смотреть видео \(clip.title)")
             HStack(alignment: .center) {

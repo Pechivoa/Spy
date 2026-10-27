@@ -46,6 +46,9 @@ final class AppModel: ObservableObject {
     }
     @Published var quality: Quality { didSet { preferences.set(quality.rawValue, forKey: "quality") } }
     @Published var systemAudio: Bool { didSet { preferences.set(systemAudio, forKey: "audio") } }
+    let applicationAudio: ApplicationAudioSelection
+    let captureTuning: CaptureTuningSettings
+    @Published var applicationAudioIssue: String?
     @Published var microphone: Bool { didSet { preferences.set(microphone, forKey: "microphone") } }
     @Published var captureMode: CaptureMode { didSet { preferences.set(captureMode.rawValue, forKey: "captureMode") } }
     @Published var windowID: CGWindowID = 0 { didSet { preferences.set(Int(windowID), forKey: "windowID") } }
@@ -168,11 +171,13 @@ final class AppModel: ObservableObject {
         self.captureAccess = captureAccess ?? .live
         let defaults = suppliedDefaults ?? (preview ? UserDefaults(suiteName: "Spy.Preview." + UUID().uuidString)! : UserDefaults.standard)
         preferences = defaults
+        captureTuning = CaptureTuningSettings(defaults: defaults)
         privacy = PrivacyController(defaults: defaults, initialScreenLocked: !preview && PrivacyController.currentScreenLockHint())
         shortcuts = preview ? ShortcutBindings() : ShortcutBindings.load(from: defaults)
         minutes = defaults.object(forKey: "minutes") == nil ? 5 : min(30, max(0, defaults.double(forKey: "minutes")))
         quality = Quality(rawValue: defaults.string(forKey: "quality") ?? "") ?? .balanced
         systemAudio = defaults.object(forKey: "audio") == nil ? true : defaults.bool(forKey: "audio")
+        applicationAudio = ApplicationAudioSelection(defaults: defaults)
         microphone = preview ? false : defaults.bool(forKey: "microphone")
         microphoneCleanup = defaults.bool(forKey: "microphoneCleanup")
         captureMode = CaptureMode(rawValue: defaults.string(forKey: "captureMode") ?? "") ?? .display
@@ -224,10 +229,20 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.journal.record(level, topic, detail) }
         }
         engine.onLevels = { [weak self] value in Task { @MainActor in self?.audioMeter = value } }
+        engine.onApplicationAudioWarning = { [weak self] value in Task { @MainActor in self?.applicationAudioIssue = value } }
+        applicationAudio.onApplicationsChanged = { [weak self] in
+            guard let self, self.recording, self.systemAudio, self.applicationAudio.mode == .selected else { return }
+            Task {
+                do { try await self.engine.refreshApplicationAudio() }
+                catch is CancellationError {}
+                catch { self.journal.record(.warning, "Звук приложений", describeError(error)) }
+            }
+        }
+        if !preview { applicationAudio.install() }
         refreshDisplays()
         refreshMicrophones()
         if preview { return }
-        journal.record(.info, "Запуск", "Spy 1.10.1 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
+        journal.record(.info, "Запуск", "Spy 1.11.0 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
         if let issue = metadata.loadError { journal.record(.error, "Данные библиотеки", "Автоочистка приостановлена для защиты избранного.\n" + metadata.url.path + "\n" + issue) }
         hotkeys = HotKeys(bindings: shortcuts) { [weak self] id in
             Task { @MainActor in
@@ -288,7 +303,12 @@ final class AppModel: ObservableObject {
         Task { await reloadClips(); if autoCleanup { await cleanupLibrary() } }
     }
 
-    var estimatedBytes: Int64 { Int64(effectiveMinutes * 60 * Double(effectiveQuality.bitrate + (systemAudio ? 192_000 : 0) + (microphone ? 96_000 : 0)) / 8) }
+    var estimatedBytes: Int64 {
+        let encoding = captureTuning.encoding
+        let bitrate = (try? encoding.effectiveBitrate(defaultBitrate: effectiveQuality.bitrate)) ?? effectiveQuality.bitrate
+        let expected = Int64(effectiveMinutes * 60 * Double(bitrate + (systemAudio ? 192_000 : 0) + (microphone ? 96_000 : 0)) / 8)
+        return encoding.cacheLimitBytes > 0 ? min(expected, encoding.cacheLimitBytes) : expected
+    }
     var microphoneAvailable: Bool { if #available(macOS 15.0, *) { return true }; return false }
     var audioSummary: String {
         if systemAudio && microphone { return "Система + микрофон" }
@@ -365,7 +385,7 @@ final class AppModel: ObservableObject {
         } else { needsMicrophonePermission = false }
         do {
             startupStatus = "Запускаю захват…"
-            let config = RecordingConfig(displayID: displayID, quality: effectiveQuality, audio: systemAudio, microphone: microphone, seconds: max(30, effectiveMinutes * 60), windowID: captureMode == .window ? windowID : nil, microphoneID: microphoneID.isEmpty ? nil : microphoneID, excludedBundleIDs: privacy.excludedBundleIDs, microphoneCleanup: microphoneCleanup)
+            let config = RecordingConfig(displayID: displayID, quality: effectiveQuality, audio: systemAudio, microphone: microphone, seconds: max(30, effectiveMinutes * 60), windowID: captureMode == .window ? windowID : nil, microphoneID: microphoneID.isEmpty ? nil : microphoneID, excludedBundleIDs: privacy.excludedBundleIDs, microphoneCleanup: microphoneCleanup, applicationAudioMode: applicationAudio.mode, applicationAudioBundleIDs: applicationAudio.bundleIDs, encoding: captureTuning.encoding, masks: captureTuning.enabledMasks)
             if let captureStartOverride { try await captureStartOverride(config) }
             else { try await engine.start(config) }
             if let captureFailure { throw SpyError.message(captureFailure) }

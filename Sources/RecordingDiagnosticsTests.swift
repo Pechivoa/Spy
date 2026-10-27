@@ -11,7 +11,7 @@ private actor DiagnosticsStartSignal {
     }
 }
 
-/// Uses the real H.264/AAC encoder with generated frames and tones. No test
+/// Uses the real H.264/HEVC and AAC encoders with generated frames and tones. No test
 /// starts ScreenCaptureKit, accesses a microphone or changes user preferences.
 @MainActor enum RecordingDiagnosticsTests {
     private static var access: CaptureAccess {
@@ -70,6 +70,32 @@ private actor DiagnosticsStartSignal {
             try requirePrivateCleanup()
         }
         print("PASS: diagnostic H.264 decode, source-specific AAC/PCM, disabled sources and private capture cleanup")
+
+        if CaptureEncodingOptions.hardwareHEVCAvailable(width: 320, height: 180) {
+            let hevcConfig = RecordingConfig(displayID: 0, quality: .balanced, audio: true, microphone: true,
+                seconds: 0, encoding: CaptureEncodingOptions(codec: .hevc))
+            let hevc = RecordingDiagnostics(access: access, captureStartOverride: { engine, selected in
+                try engine.beginTest(seconds: selected.seconds, audio: true, microphone: true,
+                    encoding: selected.encoding, masks: [RecordingMask(x: 0.2, y: 0.2, width: 0.3, height: 0.4)])
+                try await feed(engine, system: true, microphone: true)
+            }, testDuration: 0, tempRoot: privateRoot)
+            await hevc.run(config: hevcConfig, expectedDimensions: dimensions)
+            try require(hevc, .video, .passed, "Actual HEVC packets and frames pass diagnosis")
+            try require(hevc, .system, .passed, "HEVC recording retains valid system AAC")
+            try require(hevc, .microphone, .passed, "HEVC recording retains valid microphone AAC")
+            try SelfTest.require(hevc.results.first(where: { $0.component == .video })?.detail.hasPrefix("HEVC:") == true,
+                "Diagnostic report identifies the actual HEVC codec")
+            try requirePrivateCleanup()
+
+            let mismatch = RecordingDiagnostics(access: access, captureStartOverride: { engine, selected in
+                try engine.beginTest(seconds: selected.seconds, encoding: CaptureEncodingOptions(codec: .hevc))
+                try await feed(engine, system: false, microphone: false)
+            }, testDuration: 0, tempRoot: privateRoot)
+            await mismatch.run(config: RecordingConfig(displayID: 0, quality: .balanced, audio: false, seconds: 0), expectedDimensions: dimensions)
+            try require(mismatch, .video, .failed, "A silent codec downgrade/mismatch cannot be reported as success")
+            try requirePrivateCleanup()
+            print("PASS: actual HEVC diagnosis, accurate codec report, both AAC tracks and explicit unexpected-codec failure")
+        }
 
         let fullConfig = RecordingConfig(displayID: 0, quality: .balanced, audio: true, microphone: true, seconds: 30)
         let engine = SpyEngine(cacheRoot: directory.appendingPathComponent("existing-ring"))
