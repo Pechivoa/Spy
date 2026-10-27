@@ -31,6 +31,7 @@ struct Clip: Identifiable, Equatable {
 struct DisplayChoice: Identifiable {
     var id: CGDirectDisplayID
     var name: String
+    var uuid: String? = nil
 }
 
 @MainActor
@@ -78,7 +79,9 @@ final class AppModel: ObservableObject {
     var cleanupTimer: Timer?
     var lastOverLimitBytes: Int64?
     @Published var displays: [DisplayChoice] = []
-    @Published var displayID: CGDirectDisplayID = CGMainDisplayID() { didSet { preferences.set(Int(displayID), forKey: "displayID") } }
+    @Published var displayID: CGDirectDisplayID = CGMainDisplayID() {
+        didSet { preferences.set(Int(displayID), forKey: "displayID"); rememberDisplayIdentity() }
+    }
     @Published var recording = false { didSet { updateHUD(); automationRuntimeChanged() } }
     @Published var busy = false { didSet { automationRuntimeChanged(); if !busy { flushCaptureFailure(); if pendingPrivacyUpdate { Task { await reconcilePrivacyState() } } } } }
     @Published var manualSaving = false { didSet { automationRuntimeChanged() } }
@@ -242,7 +245,7 @@ final class AppModel: ObservableObject {
         refreshDisplays()
         refreshMicrophones()
         if preview { return }
-        journal.record(.info, "Запуск", "Spy 1.11.1 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
+        journal.record(.info, "Запуск", "Spy 1.11.2 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
         if let issue = metadata.loadError { journal.record(.error, "Данные библиотеки", "Автоочистка приостановлена для защиты избранного.\n" + metadata.url.path + "\n" + issue) }
         hotkeys = HotKeys(bindings: shortcuts) { [weak self] id in
             Task { @MainActor in
@@ -318,7 +321,7 @@ final class AppModel: ObservableObject {
     }
     var captureTargetSummary: String {
         if captureMode == .window { return "Записывается только выбранное окно." }
-        let name = displays.first(where: { $0.id == displayID })?.name ?? "отключённый экран"
+        let name = selectedDisplay?.name ?? "отключённый экран"
         return "Записывается экран «\(name)»." + (displays.count > 1 ? " Другие мониторы в видео не входят." : "")
     }
     var totalLibraryBytes: Int64 { clips.reduce(0) { $0 + $1.bytes } }
@@ -330,17 +333,38 @@ final class AppModel: ObservableObject {
     var canSave: Bool { recording && !saving && !busy && !shuttingDown && stats.frameCount > 0 && minutes > 0 }
     var canPreviewBuffer: Bool { canSave && bufferPreview == nil }
 
-    func refreshDisplays() {
-        displays = NSScreen.screens.compactMap { screen in
-            guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32 else { return nil }
-            return DisplayChoice(id: id, name: screen.localizedName)
+    var selectedDisplay: DisplayChoice? {
+        guard let match = DisplaySelection.resolve(id: displayID, uuid: preferences.string(forKey: "displayUUID"), choices: displays),
+              match.id == displayID else { return nil }
+        return match
+    }
+    var missingDisplayHelp: String { "Выбранный экран отключён. Выберите экран перед продолжением повтора." }
+    func rememberDisplayIdentity() {
+        if let selected = displays.first(where: { $0.id == displayID }) {
+            preferences.set(selected.uuid, forKey: "displayUUID")
+        } else {
+            preferences.removeObject(forKey: "displayUUID")
         }
-        if !displays.contains(where: { $0.id == displayID }) {
-            let issue = "Выбранный экран отключён. Выберите экран перед продолжением повтора."
-            if recording && captureMode == .display && captureFailure != issue {
+    }
+    func refreshDisplays(available: [DisplayChoice]? = nil) {
+        let uuid = preferences.string(forKey: "displayUUID")
+        displays = available ?? DisplaySelection.connected()
+        let match = DisplaySelection.resolve(id: displayID, uuid: uuid, choices: displays)
+        // Never change the target under a running stream. A reconnect can
+        // change display IDs; stop safely, then resolve the same UUID on start.
+        if recording || startupStatus != nil {
+            if match?.id != displayID && captureMode == .display && captureFailure != missingDisplayHelp {
                 engine.requestPrivacyBlock(true)
-                Task { await handleCaptureFailure(issue) }
-            } else if !recording && captureMode == .display { captureIssue = issue }
+                Task { await handleCaptureFailure(missingDisplayHelp) }
+            }
+        } else if !busy, let match {
+            if displayID != match.id {
+                displayID = match.id
+                journal.record(.info, "Выбор экрана", "Восстановлен монитор «\(match.name)» после изменения системного номера.")
+            } else { rememberDisplayIdentity() }
+            if captureIssue == missingDisplayHelp { captureIssue = nil }
+        } else if captureMode == .display, match == nil {
+            captureIssue = missingDisplayHelp
         }
         refreshDisk()
     }
@@ -353,6 +377,12 @@ final class AppModel: ObservableObject {
     }
     func start(forManual: Bool = false, requestPermission: Bool = true) async {
         guard !recording, !busy, !saving, !shuttingDown, !diagnosticsBusy else { return }
+        refreshDisplays()
+        if captureMode == .display && selectedDisplay == nil {
+            captureIssue = missingDisplayHelp
+            journal.record(.warning, "Выбор экрана", missingDisplayHelp)
+            return
+        }
         do { try privacy.validateConfiguration() }
         catch { showError(error.localizedDescription, topic: "Приватность", details: describeError(error)); return }
         guard !privacy.isBlocked && !manualPrivacyPause else { message = "Запись приостановлена для приватности."; return }

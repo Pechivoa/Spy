@@ -12,9 +12,9 @@ struct CaptureTargetView: View {
                 VStack(alignment: .leading, spacing: 7) {
                     caption(model.captureMode == .display ? "ЭКРАН" : "ОКНО")
                     if model.captureMode == .display {
-                        Picker("Экран", selection: $model.displayID) {
+                        Picker("Экран", selection: Binding(get: { model.selectedDisplay?.id ?? CGDirectDisplayID.max }, set: { model.displayID = $0 })) {
                             ForEach(model.displays) { Text($0.name).tag($0.id) }
-                            if !model.displays.contains(where: { $0.id == model.displayID }) { Text("Выбранный экран отключён").tag(model.displayID) }
+                            if model.selectedDisplay == nil { Text("Выбранный экран отключён").tag(CGDirectDisplayID.max) }
                         }.labelsHidden()
                     } else {
                         HStack {
@@ -169,5 +169,27 @@ struct RenameClipSheet: View {
     private func save() {
         do { try model.setClipName(clip, name: name); dismiss() }
         catch { issue = error.localizedDescription; model.journal.record(.error, "Название видео", describeError(error)) }
+    }
+}
+
+struct CaptureDisplayRecoveryMenu: View {
+    @ObservedObject var model: AppModel
+    var compact = false
+    var body: some View {
+        Menu {
+            ForEach(model.displays) { display in
+                Button("Записывать «" + display.name + "»") {
+                    model.displayID = display.id
+                    Task { await model.toggleRecording() }
+                }
+            }
+            if model.displays.isEmpty { Text("Подключите экран и повторите попытку") }
+        } label: {
+            if compact { Image(systemName: "display.trianglebadge.exclamationmark") }
+            else { Label("Выбрать экран и включить", systemImage: "display") }
+        }
+        .accessibilityLabel("Выбрать экран и включить повтор")
+        .help("Выбранный монитор отключён. Выберите экран для записи.")
+        .disabled(model.recording || model.busy || model.saving || model.diagnosticsBusy || model.minutes == 0)
     }
 }

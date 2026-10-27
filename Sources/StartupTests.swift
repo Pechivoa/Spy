@@ -5,6 +5,7 @@ import ScreenCaptureKit
 @MainActor enum StartupTests {
     static func run(directory: URL) async throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try await displayRecovery()
         var roots: [URL] = []
         defer { for root in roots { try? FileManager.default.removeItem(at: root) } }
         func model(screen: Bool, mic: AVAuthorizationStatus = .authorized) -> AppModel {
@@ -117,4 +118,53 @@ import ScreenCaptureKit
         await failing.stop()
         print("PASS: first-frame timeout, pending startup cancellation, encoder failure while app is busy")
     }
+    private static func displayRecovery() async throws {
+        let old = DisplayChoice(id: 7, name: "Same name", uuid: "monitor-A")
+        let reused = DisplayChoice(id: 7, name: "Same name", uuid: "monitor-B")
+        let moved = DisplayChoice(id: 12, name: "Same name", uuid: "monitor-A")
+        try SelfTest.require(DisplaySelection.resolve(id: 7, uuid: "monitor-A", choices: [reused, moved])?.id == 12,
+            "The same physical monitor is recovered after ID reuse, even with identical names")
+        try SelfTest.require(DisplaySelection.resolve(id: 7, uuid: "monitor-A", choices: [reused]) == nil &&
+            DisplaySelection.resolve(id: 7, uuid: "missing", choices: [old]) == nil,
+            "A missing monitor UUID never falls back to a different monitor using its old ID")
+        try SelfTest.require(DisplaySelection.resolve(id: 7, uuid: nil, choices: [old])?.id == 7,
+            "Legacy numeric-only selection migrates when its chosen display is available")
+        let model = AppModel(preview: true)
+        defer { try? FileManager.default.removeItem(at: model.libraryURL.deletingLastPathComponent()) }
+        model.saveBufferOnExit = false
+        model.displays = [old]; model.displayID = old.id
+        try SelfTest.require(model.preferences.string(forKey: "displayUUID") == "monitor-A", "Explicit selection remembers the monitor UUID")
+        model.refreshDisplays(available: [reused, moved])
+        try SelfTest.require(model.displayID == 12 && model.selectedDisplay?.uuid == "monitor-A" && model.captureIssue == nil,
+            "Idle refresh resolves the new numeric ID and preserves the same monitor")
+        model.refreshDisplays(available: [reused])
+        try SelfTest.require(model.selectedDisplay == nil && model.captureIssue == model.missingDisplayHelp &&
+            model.preferences.string(forKey: "displayUUID") == "monitor-A", "Disconnected selection keeps its identity for a later reconnect")
+        model.refreshDisplays(available: [old]); model.displayID = old.id
+        try model.engine.beginTest(seconds: 30)
+        model.engine.testFrame(try SelfTest.pixel(frame: 1), at: CMTime(value: 9000, timescale: 30))
+        model.recording = true
+        model.refreshDisplays(available: [reused, moved])
+        let deadline = Date().addingTimeInterval(2)
+        while model.recording && Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
+        try SelfTest.require(!model.recording && model.displayID == 7 && model.preferences.string(forKey: "displayUUID") == "monitor-A",
+            "A changed capture target stops instead of silently switching an active stream")
+        model.refreshDisplays()
+        guard let live = model.displays.first, let uuid = live.uuid else { throw SpyError.message("TEST FAILED: Live display UUID unavailable") }
+        model.displayID = UInt32.max
+        model.preferences.set(uuid, forKey: "displayUUID")
+        var configured: CGDirectDisplayID?
+        model.captureStartOverride = { config in
+            configured = config.displayID
+            try model.engine.beginTest(seconds: config.seconds)
+            model.engine.testFrame(try SelfTest.pixel(frame: 2), at: CMTime(value: 9300, timescale: 30))
+            try await model.engine.waitForFirstFrame(timeout: 0.3)
+        }
+        await model.start()
+        try SelfTest.require(model.recording && configured == live.id && model.displayID == live.id && model.captureIssue == nil,
+            "Start refreshes stale IDs using the remembered UUID before building the capture configuration")
+        await model.stop()
+        print("PASS: monitor UUID persistence, reconnect/ID reuse, same-name isolation, safe active stop and real startup target recovery")
+    }
+
 }

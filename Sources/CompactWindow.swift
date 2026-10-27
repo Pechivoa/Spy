@@ -177,6 +177,9 @@ struct CompactSpyView: View {
             HStack(spacing: 8) {
                 Circle().fill(model.privacyPaused ? Theme.accent : model.recording ? Theme.green : model.captureIssue != nil ? Theme.accent : Theme.muted).frame(width: 6, height: 6)
                 Text(status).font(.system(size: tiny ? 10 : 12, weight: .medium)).lineLimit(1)
+                if !model.recording && model.captureMode == .display && model.selectedDisplay == nil {
+                    CaptureDisplayRecoveryMenu(model: model, compact: true).menuStyle(.borderlessButton).fixedSize()
+                }
                 Spacer(minLength: 0)
                 Text(clockText(model.manualRecording ? model.stats.manualSeconds : model.stats.seconds))
                     .font(.system(size: 14, weight: .semibold, design: .monospaced))

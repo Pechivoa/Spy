@@ -135,6 +135,11 @@ import Foundation
         }
         do { try privacy.validateConfiguration() }
         catch { showError(error.localizedDescription, topic: "Проверка записи"); return }
+        if !recording { refreshDisplays() }
+        guard captureMode != .display || selectedDisplay != nil else {
+            captureIssue = missingDisplayHelp
+            return
+        }
         diagnosticsBusy = true
         defer { diagnosticsBusy = false; Task { await reconcilePendingChanges() } }
         await recordingDiagnostics.run(config: recordingConfiguration, existingEngine: recording ? engine : nil)

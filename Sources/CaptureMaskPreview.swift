@@ -6,6 +6,8 @@ import AppKit
         guard !recording, !busy, !saving, !diagnosticsBusy else {
             throw SpyError.message("Остановите повтор перед редактированием приватных областей.")
         }
+        refreshDisplays()
+        if captureMode == .display && selectedDisplay == nil { throw SpyError.message(missingDisplayHelp) }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let filter: SCContentFilter
         if captureMode == .window {
