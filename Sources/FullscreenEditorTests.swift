@@ -129,13 +129,38 @@ import AVFoundation
         guard let panel = host.presentation.panel else { throw SpyError.message("TEST FAILED: fullscreen editor panel") }
         try SelfTest.require(panel.collectionBehavior.contains(.fullScreenNone) && !panel.styleMask.contains(.fullScreen) && host.playerView.superview === panel.contentView,
             "The same player view enters an editing presentation without a native excluded Space")
+        let displayFrame = (window.screen ?? NSScreen.main)!.frame
+        panel.contentView?.layoutSubtreeIfNeeded()
+        try await Task.sleep(nanoseconds: 150_000_000)
+        panel.contentView?.layoutSubtreeIfNeeded()
+        try SelfTest.require(panel.frame == displayFrame && panel.contentView?.bounds.size == displayFrame.size,
+            "The editing toolbar cannot shrink fullscreen after SwiftUI layout: panel=\(panel.frame), content=\(String(describing: panel.contentView?.bounds)), display=\(displayFrame)")
+        guard let controlsContainer = panel.contentView?.subviews.compactMap({ $0 as? FullSizeEditingControlsContainer }).first else {
+            throw SpyError.message("TEST FAILED: fullscreen editing controls container")
+        }
+        for size in [NSSize(width: 1440, height: 900), displayFrame.size] {
+            panel.setFrame(NSRect(origin: displayFrame.origin, size: size), display: false)
+            panel.contentView?.layoutSubtreeIfNeeded()
+            try await Task.sleep(nanoseconds: 40_000_000)
+            panel.contentView?.layoutSubtreeIfNeeded()
+            try SelfTest.require(panel.frame.size == size && panel.contentView?.bounds.size == size &&
+                abs(controlsContainer.controls.frame.width - min(1200, size.width - 40)) < 1 &&
+                controlsContainer.bounds.contains(controlsContainer.controls.frame),
+                "Display resize preserves the fullscreen canvas while centering a bounded editing toolbar")
+        }
+        NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: NSApp)
+        try await Task.sleep(nanoseconds: 40_000_000)
+        panel.contentView?.layoutSubtreeIfNeeded()
+        try SelfTest.require(host.presentation.panel === panel && panel.frame == displayFrame,
+            "Dock/menu-bar geometry notifications keep the editing player on the entire original display")
+
         panel.cancelOperation(nil)
         try SelfTest.require(host.playerView.superview === host && player.currentItem === originalItem && player.rate == 0 && abs(player.currentTime().seconds - pausedAt) < 0.002,
             "Fullscreen return preserves the selected player's paused frame and item")
         editor.detach()
         try SelfTest.require(!editor.isLooping && !editor.canSave && editor.duration == 0 && host.presentation.panel == nil,
             "Closing the parent session cleans the fullscreen editor and stale callbacks")
-        print("PASS: visible inline entry, external fullscreen bridge, same AVPlayerView and paused-frame return, observer cleanup")
+        print("PASS: fullscreen retains full display width after SwiftUI layout and resizing, centered toolbar, geometry notifications, same-view Escape return and observer cleanup")
     }
 
     private static func wait(_ message: String, timeout: Double = 5, condition: () -> Bool) async throws {

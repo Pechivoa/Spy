@@ -141,20 +141,15 @@ struct FullSizePlayer: NSViewRepresentable {
         let editorHeight: CGFloat
         if let editor = host.editor {
             editorHeight = 238
-            let controls = NSHostingView(rootView: FullscreenEditingToolbar(editor: editor))
+            let controls = FullSizeEditingControlsContainer(editor: editor)
             controls.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(controls)
             NSLayoutConstraint.activate([
-                controls.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-                controls.widthAnchor.constraint(lessThanOrEqualToConstant: 1200),
-                controls.leadingAnchor.constraint(greaterThanOrEqualTo: content.leadingAnchor, constant: 20),
-                controls.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -20),
+                controls.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+                controls.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
                 controls.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14),
                 controls.heightAnchor.constraint(equalToConstant: editorHeight - 14)
             ])
-            // A preferred full-width panel, constrained to small displays above.
-            let preferredWidth = controls.widthAnchor.constraint(equalTo: content.widthAnchor, constant: -40)
-            preferredWidth.priority = .defaultHigh; preferredWidth.isActive = true
         } else { editorHeight = 0 }
         host.movePlayer(to: content, topInset: safeTop + 58, bottomInset: editorHeight)
         panel.contentView = content
@@ -218,6 +213,25 @@ struct FullSizePlayer: NSViewRepresentable {
             NSApp.presentationOptions = previousPresentation
         }
         previousPresentation = nil; appliedPresentation = nil
+    }
+}
+
+/// Keep the toolbar's preferred width local to this container. AppKit derives
+/// a window's maximum size from its content constraints, so a <=1200 constraint
+/// connected to the content view can shrink a 2560-point fullscreen window.
+@MainActor final class FullSizeEditingControlsContainer: NSView {
+    let controls: NSHostingView<FullscreenEditingToolbar>
+    init(editor: PlayerEditingState) {
+        controls = NSHostingView(rootView: FullscreenEditingToolbar(editor: editor))
+        controls.sizingOptions = []
+        super.init(frame: .zero)
+        addSubview(controls)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func layout() {
+        super.layout()
+        let width = min(1200, bounds.width)
+        controls.frame = NSRect(x: (bounds.width - width) / 2, y: 0, width: width, height: bounds.height)
     }
 }
 
