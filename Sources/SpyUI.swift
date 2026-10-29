@@ -228,7 +228,7 @@ struct ContentView: View {
                     Text("\(fileSize(model.freeSpace)) свободно").font(.system(size: 11)).foregroundStyle(Theme.muted)
                 }
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(Theme.panel, in: RoundedRectangle(cornerRadius: 14))
-            Text("SPY FOR MAC  /  1.12.0").font(.system(size: 9, weight: .medium)).tracking(1.4).foregroundStyle(Theme.muted.opacity(0.6)).padding(.top, 20).padding(.bottom, 24)
+            Text("SPY FOR MAC  /  1.12.1").font(.system(size: 9, weight: .medium)).tracking(1.4).foregroundStyle(Theme.muted.opacity(0.6)).padding(.top, 20).padding(.bottom, 24)
         }.padding(.horizontal, 16).frame(width: 210).background(Theme.sidebar)
             .overlay(alignment: .trailing) { Rectangle().fill(Theme.border).frame(width: 1) }
     }

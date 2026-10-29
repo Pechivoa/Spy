@@ -248,7 +248,7 @@ final class AppModel: ObservableObject {
         refreshDisplays()
         refreshMicrophones()
         if preview { return }
-        journal.record(.info, "Запуск", "Spy 1.12.0 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
+        journal.record(.info, "Запуск", "Spy 1.12.1 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
         if let issue = metadata.loadError { journal.record(.error, "Данные библиотеки", "Автоочистка приостановлена для защиты избранного.\n" + metadata.url.path + "\n" + issue) }
         hotkeys = HotKeys(bindings: shortcuts) { [weak self] id in
             Task { @MainActor in

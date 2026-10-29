@@ -59,6 +59,17 @@ struct SpyInstallPlan: Codable {
     let version: String
 }
 
+@MainActor enum SpyUpdateTermination {
+    static func request(_ terminate: @escaping @MainActor () -> Void = { NSApp.terminate(nil) }) {
+        // AppKit's terminate-later loop must start from the run loop, outside
+        // both a Swift task and a main-queue block. Its nested loop cannot
+        // drain the main queue while such a block is still executing.
+        RunLoop.main.perform(inModes: [.common]) {
+            MainActor.assumeIsolated { terminate() }
+        }
+    }
+}
+
 enum SpyUpdateInstaller {
     static let identifier = "local.spy.mac"
     static func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
@@ -189,7 +200,7 @@ enum SpyUpdateInstaller {
             if let data = try? Data(contentsOf: file), data.count <= 16_384 { status = String(data: data, encoding: .utf8) }
         }
     }
-    static var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.12.0" }
+    static var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.12.1" }
     var hasUpdate: Bool { release.map { (try? SpyVersion($0.tag_name) > SpyVersion(Self.currentVersion)) == true } ?? false }
     func check() async {
         guard !working else { return }; working = true; defer { working = false }
@@ -248,13 +259,14 @@ enum SpyUpdateInstaller {
             let process = Process(); process.executableURL = helperURL; process.arguments = ["--spy-install-update", planURL.path]
             try process.run(); helperProcess = process; stage = folder; pendingInstall = true
             status = "Сохраняю сессию и перезапускаю Spy…"
-            NSApp.terminate(nil)
+            SpyUpdateTermination.request()
         } catch {
             if let directory { try? files.removeItem(at: directory) }
             status = error.localizedDescription
         }
     }
     func cancelInstall() {
+        guard pendingInstall || helperProcess != nil else { return }
         if let stage { try? Data().write(to: stage.appendingPathComponent("cancelled")) }
         if helperProcess?.isRunning == true { helperProcess?.terminate() }
         helperProcess = nil; pendingInstall = false; status = "Обновление отложено. Spy продолжает работать."

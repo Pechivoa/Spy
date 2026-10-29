@@ -4,6 +4,19 @@ import AppKit
     static func run(directory: URL) async throws {
         let files = FileManager.default
         try files.createDirectory(at: directory, withIntermediateDirectories: true)
+        var installTaskReturned = false, terminationCalled = false, calledAfterReturn = false
+        SpyUpdateTermination.request {
+            terminationCalled = true
+            calledAfterReturn = installTaskReturned
+        }
+        try verify(!terminationCalled, "AppKit termination must not run inline inside the installing Swift task")
+        installTaskReturned = true
+        driveRunLoop(until: Date().addingTimeInterval(2)) { terminationCalled }
+        try verify(terminationCalled && calledAfterReturn, "Deferred termination releases the main actor before async delegate shutdown")
+        let idleUpdates = AppUpdates()
+        idleUpdates.cancelInstall()
+        try verify(idleUpdates.status == nil, "Normal quit cannot invent a cancelled update")
+        print("PASS: deferred AppKit termination and idle cancellation guard")
         try verify(try SpyVersion("1.12.0") > SpyVersion("1.11.9"), "Semantic versions compare numerically")
         try verify(try SpyVersion("v1.12.0") == SpyVersion("1.12"), "Version prefix and missing patch normalize")
         for text in ["../bad", "1", "1.2-beta", "1..3", "-1.2", "99999999999999999999999.0"] {
@@ -93,6 +106,9 @@ import AppKit
             try SpyUpdateArchive.inspect(data)
             print("PASS: live GitHub release API, bounded redirect-aware ZIP download, SHA256 and archive inspection")
         }
+    }
+    private static func driveRunLoop(until deadline: Date, completed: () -> Bool) {
+        while !completed() && Date() < deadline { RunLoop.main.run(mode: .default, before: deadline) }
     }
     private static func verify(_ condition: Bool, _ message: String) throws { try SelfTest.require(condition, message) }
     private static func version(_ app: URL) throws -> String {
