@@ -106,7 +106,7 @@ struct WindowChoice: Identifiable { var id: CGWindowID; var title: String }
 struct MicrophoneChoice: Identifiable { var id: String; var name: String }
 
 enum AudioSource: String, CaseIterable { case system = "Spy.System", microphone = "Spy.Microphone" }
-struct AudioLevels {
+struct AudioLevels: Equatable {
     var system: Float = 1
     var microphone: Float = 1
     subscript(_ source: AudioSource) -> Float { min(1, max(0, source == .system ? system : microphone)) }

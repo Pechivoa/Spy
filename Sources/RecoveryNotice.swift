@@ -15,9 +15,7 @@ struct RecoveryNotice: View {
                 }
             }
             Spacer(minLength: 2)
-            Button("Восстановить") {
-                if let folder = model.recoveryFolders.last { Task { await model.recoverRecording(folder) } }
-            }.buttonStyle(.bordered).controlSize(.small)
+            Button("Открыть центр") { model.section = 6 }.buttonStyle(.bordered).controlSize(.small)
                 .disabled(model.saving || model.busy || model.manualRecording)
         }
         .padding(compact ? 9 : 14)

@@ -58,7 +58,8 @@ struct LogEntry: Codable, Identifiable, Equatable {
     }
     func text(entries selected: [LogEntry]? = nil) -> String {
         let values = (selected ?? entries).sorted { $0.date < $1.date }
-        return "Spy 1.7.0 — журнал событий\nmacOS: \(ProcessInfo.processInfo.operatingSystemVersionString)\nЧасовой пояс: \(SpyDates.timeZone.identifier)\nСобытий: \(values.count)\n\n" + values.map(\.line).joined(separator: "\n\n") + "\n"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.13.0"
+        return "Spy \(version) — журнал событий\nmacOS: \(ProcessInfo.processInfo.operatingSystemVersionString)\nЧасовой пояс: \(SpyDates.timeZone.identifier)\nСобытий: \(values.count)\n\n" + values.map(\.line).joined(separator: "\n\n") + "\n"
     }
     func export(to url: URL, entries selected: [LogEntry]? = nil) throws {
         try text(entries: selected).write(to: url, atomically: true, encoding: .utf8)

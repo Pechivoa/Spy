@@ -170,6 +170,10 @@ enum SelfTest {
         if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--spy-install-update" {
             exit(SpyUpdateInstaller.helper(planURL: URL(fileURLWithPath: CommandLine.arguments[2])))
         }
+        if let index = CommandLine.arguments.firstIndex(of: "--workspace-test"), CommandLine.arguments.count > index + 1 {
+            do { try await ReliabilityWorkspaceTests.run(directory: URL(fileURLWithPath: CommandLine.arguments[index + 1])); exit(0) }
+            catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--updater-test"), CommandLine.arguments.count > index + 1 {
             do { try await AppUpdatesTests.run(directory: URL(fileURLWithPath: CommandLine.arguments[index + 1])); exit(0) }
             catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }

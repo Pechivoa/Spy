@@ -8,6 +8,10 @@ import AppKit
         _ = NSApplication.shared
         let model = AppModel(preview: true)
         model.section = section == 6 ? 4 : section == 7 ? 5 : section == 9 || section == 11 || section == 12 || section == 13 || section == 16 || section == 17 ? 0 : section
+        if section == 18 { model.section = 6 }
+        if section == 19 { model.section = 7 }
+        if section == 20 { model.section = 8 }
+        if section == 21 { model.section = 0 }
         model.message = "Пример интерфейса · демонстрационные данные"
         if let sourceURL {
             for index in 0..<3 {
@@ -21,13 +25,38 @@ import AppKit
             model.profiles = [AppProfile(bundleID: "example.game", name: "Пример: Игра", settings: CaptureSettings(quality: .smooth, minutes: 10, systemAudio: true, microphone: true, microphoneID: "", systemVolume: 0.7, microphoneVolume: 0.5, separateAudio: true))]
         }
         if section == 7 { model.batterySaving = true; model.onBattery = true }
+        if section == 18, let sourceURL {
+            let folder = model.cacheURL.appendingPathComponent("record-replay-example-" + UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: sourceURL, to: folder.appendingPathComponent("000001.mov"))
+            model.refreshRecoveryFolders()
+        }
+        if section == 19 {
+            for prefix in ["preview-", "record-replay-example-", "replay-"] {
+                let folder = model.cacheURL.appendingPathComponent(prefix + UUID().uuidString, isDirectory: true)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try Data(repeating: 0, count: 32_768).write(to: folder.appendingPathComponent("Example.bin"))
+            }
+        }
+        if section == 20 {
+            let began = Date().addingTimeInterval(-120)
+            model.sessions.begin(id: UUID(), source: "Пример: экран Mac · 1080p / 60 FPS", at: began)
+            model.sessions.event("pause", "Пауза приватности", at: began.addingTimeInterval(20))
+            model.sessions.event("resume", "Запись продолжена", at: began.addingTimeInterval(40))
+            if let clip = model.clips.first { model.sessions.saved(clip.url) }
+            model.sessions.end(reason: "Сессия сохранена", at: began.addingTimeInterval(100))
+        }
+        if section == 21 {
+            model.captureHealth.sample = CaptureTelemetry(began: 0, screen: 1, encoded: 1, wantsMicrophone: true)
+            model.captureHealth.check(active: true, paused: false, now: 20)
+        }
         if section == 9 {
             model.recording = true; model.manualRecording = true; model.microphone = true
             model.stats = BufferStats(seconds: 285, bytes: 220_000_000, frameCount: 9000, manualSeconds: 521, manualBytes: 470_000_000)
             model.audioMeter = AudioMeter(system: 0.12, microphone: 0.05)
         }
         if section == 3 {
-            model.journal.record(.info, "Пример: запуск", "Spy 1.12.1 запущен. Журнал сохраняется между запусками.")
+            model.journal.record(.info, "Пример: запуск", "Spy 1.13.0 запущен. Журнал сохраняется между запусками.")
             model.journal.record(.info, "Пример: настройка клавиш", "Сохранить повтор → ⌃⇧S")
             model.journal.record(.warning, "Пример: доступ к экрану", "Разрешение ещё не получено. Разрешите Spy запись экрана в настройках macOS.")
             model.journal.record(.error, "Пример: захват экрана", "Не удалось запустить захват.\nДомен: com.apple.ScreenCaptureKit.SCStreamErrorDomain · Код: −3801")

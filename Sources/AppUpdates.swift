@@ -200,7 +200,7 @@ enum SpyUpdateInstaller {
             if let data = try? Data(contentsOf: file), data.count <= 16_384 { status = String(data: data, encoding: .utf8) }
         }
     }
-    static var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.12.1" }
+    static var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.13.0" }
     var hasUpdate: Bool { release.map { (try? SpyVersion($0.tag_name) > SpyVersion(Self.currentVersion)) == true } ?? false }
     func check() async {
         guard !working else { return }; working = true; defer { working = false }
@@ -253,7 +253,9 @@ enum SpyUpdateInstaller {
             let planURL = folder.appendingPathComponent("plan.json")
             try JSONEncoder().encode(plan).write(to: planURL, options: .atomic)
             let helperURL = folder.appendingPathComponent("SpyInstaller")
-            try files.copyItem(at: Bundle.main.executableURL!, to: helperURL)
+            let embedded = current.appendingPathComponent("Contents/Helpers/SpyInstaller")
+            let helperSource = files.isExecutableFile(atPath: embedded.path) ? embedded : Bundle.main.executableURL!
+            try files.copyItem(at: helperSource, to: helperURL)
             try files.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helperURL.path)
             guard canInstall?() != false else { throw SpyError.message("Установка отложена: завершите ручную запись или сохранение и повторите попытку.") }
             let process = Process(); process.executableURL = helperURL; process.arguments = ["--spy-install-update", planURL.path]

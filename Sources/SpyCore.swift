@@ -102,6 +102,8 @@ struct SpySourceInterval: Codable {
 final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     let queue = DispatchQueue(label: "local.spy.encoder", qos: .userInitiated)
     var onStats: ((BufferStats) -> Void)?
+    var onTelemetry: ((CaptureTelemetry) -> Void)?
+    private var healthTelemetry = CaptureTelemetry()
     var onFailure: ((String) -> Void)?
     var onDiagnostic: ((LogLevel, String, String) -> Void)?
     var onLevels: ((AudioMeter) -> Void)?
@@ -569,6 +571,8 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
         sessionID = UUID()
         closedContentSeconds = 0
         sessionCreatedAt = Date()
+        healthTelemetry = CaptureTelemetry(session: sessionID)
+        healthTelemetry.wantsSystem = includesAudio; healthTelemetry.wantsMicrophone = includesMicrophone
         directory = cacheRoot.appendingPathComponent("replay-" + sessionID.uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory!, withIntermediateDirectories: true)
         segments = []; finalizingSegments = [:]; latestPixel = nil; ownedFrames.reset(); sourceWarning = nil; darkSince = nil; lastDarkCheck = -.infinity; lastCopyPressure = -.infinity; frameCount = 0; markers = []; markerCounter = 0; lastStatsTime = 0; startupError = nil
@@ -712,9 +716,11 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
         }
         guard self.stream === stream else { return }
         if outputType == .screen {
+            healthTelemetry.screen = ProcessInfo.processInfo.systemUptime
             guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
                   let raw = attachments.first?[.status] as? Int,
                   let status = SCFrameStatus(rawValue: raw) else { return }
+            healthTelemetry.idle = status == .idle
             if status == .blank || status == .suspended || status == .stopped {
                 latestPixel = nil
                 closeSegment()
@@ -852,6 +858,7 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
                 throw writer?.error ?? SpyError.message("Не удалось записать кадр.")
             }
             currentFrames += 1; frameCount += 1; lastFrameTime = timestamp
+            healthTelemetry.encoded = ProcessInfo.processInfo.systemUptime
             encoderPerformance.record(at: timestamp.seconds, accepted: true)
             if frameCount == 1 {
                 onDiagnostic?(.info, "Первый кадр", "Кадр принят \(encoding.codec == .hevc ? "HEVC" : "H.264")-кодировщиком: \(width)×\(height).")
@@ -879,6 +886,8 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
                 onDiagnostic?(.warning, "Очистка микрофона", "Очистка отключена для неподдерживаемого формата; голос продолжает записываться.\n" + describeError(error))
             }
         }
+        if microphone { healthTelemetry.microphone = ProcessInfo.processInfo.systemUptime }
+        else { healthTelemetry.system = ProcessInfo.processInfo.systemUptime }
         let source: AudioSource = microphone ? .microphone : .system
         let timestamp = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample))
         if (microphone ? includesMicrophone : includesAudio), timestamp - (lastMeterTime[source] ?? 0) >= 0.1 {
@@ -973,12 +982,13 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
 
     private func persistCrashManifest() {
         guard let directory else { return }
-        let value = ReplayCrashManifest(createdAt: sessionCreatedAt, ownerPID: ProcessInfo.processInfo.processIdentifier, limitSeconds: limitSeconds, segments: segments.map { ReplayCrashManifest.Entry(file: $0.url.lastPathComponent, start: $0.start.seconds, end: $0.end.seconds) }, ownerStartedAt: ReplayCrashRecovery.ownerStartedAt, markers: markers)
+        let value = ReplayCrashManifest(createdAt: sessionCreatedAt, ownerPID: ProcessInfo.processInfo.processIdentifier, limitSeconds: limitSeconds, segments: segments.map { ReplayCrashManifest.Entry(file: $0.url.lastPathComponent, start: $0.start.seconds, end: $0.end.seconds) }, ownerStartedAt: ReplayCrashRecovery.ownerStartedAt, markers: markers, sessionID: sessionID)
         do { try JSONEncoder().encode(value).write(to: directory.appendingPathComponent(ReplayCrashRecovery.manifestName), options: .atomic) }
         catch { onDiagnostic?(.warning, "Защита буфера", "Не удалось обновить данные восстановления; готовые видео остаются в кэше. " + describeError(error)) }
     }
 
     private func publishStats() {
+        onTelemetry?(healthTelemetry)
         let now = CMTimeGetSeconds(lastFrameTime)
         if now - (lastMeterTime[.system] ?? 0) > 0.4 { meter.system = 0 }
         if now - (lastMeterTime[.microphone] ?? 0) > 0.4 { meter.microphone = 0 }

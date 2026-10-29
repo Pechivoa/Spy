@@ -80,7 +80,7 @@ import ScreenCaptureKit
             journal.record(.warning, "Лимит библиотеки", "Лимит превышен. Избранное и открытые видео защищены от автоочистки.")
         } else if !overLimit { lastOverLimitBytes = nil }
     }
-    func trimClip(_ clip: Clip, start: Double, end: Double, microphoneEnabled: Bool = true) async throws -> URL {
+    func trimClip(_ clip: Clip, start: Double, end: Double, microphoneEnabled: Bool = true, levels: AudioLevels = AudioLevels()) async throws -> URL {
         guard !saving else { throw SpyError.message("Дождитесь завершения текущего сохранения.") }
         saving = true
         defer { saving = false; refreshDisk() }
@@ -90,11 +90,12 @@ import ScreenCaptureKit
         let partial = libraryURL.appendingPathComponent("." + stem + ".mov")
         do {
             let source = try await EditableVideoAudio.load(url: clip.url)
-            try await source.export(to: partial, start: start, end: end, microphoneEnabled: microphoneEnabled)
+            try await source.export(to: partial, start: start, end: end, microphoneEnabled: microphoneEnabled, levels: levels)
             try FileManager.default.moveItem(at: partial, to: output)
             do { try metadata.set(ClipMetadata(name: String(((microphoneEnabled ? "Фрагмент · " : "Без микрофона · ") + clip.title).prefix(120)), favorite: clip.favorite, markers: MarkerTimeline.selected(metadata.get(clip.url).markers, start: start, end: end)), for: output) }
             catch { journal.record(.warning, "Данные фрагмента", "Видео сохранено, но название и избранное не записаны.\n" + describeError(error)) }
             await reloadClips()
+            sessions.copied(output, from: clip.url)
             journal.record(.info, "Обрезка", "\(clip.url.lastPathComponent) · \(preciseClock(start))–\(preciseClock(end)) → \(output.lastPathComponent)")
             if let saved = clips.first(where: { $0.url == output }) { notifySaved(saved, title: "Фрагмент сохранён") }
             if autoCleanup { await cleanupLibrary(protecting: [clip.url, output]) }

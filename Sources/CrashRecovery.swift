@@ -18,6 +18,7 @@ struct ReplayCrashManifest: Codable {
     let segments: [Entry]
     var ownerStartedAt: Date? = nil
     var markers: [ReplayMarker]? = nil
+    var sessionID: UUID? = nil
 }
 
 enum ReplayCrashRecovery {
@@ -93,6 +94,11 @@ enum ReplayCrashRecovery {
 
     static var ownerStartedAt: Date? { currentProcessStart ?? NSRunningApplication.current.launchDate }
 
+    static func hasLiveOwner(_ root: URL) -> Bool {
+        ((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [])
+            .contains { manifest(in: $0).map(ownerIsRunning) ?? false }
+    }
+
     private static func queryProcessStart(_ pid: Int32) -> Date? {
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.size
@@ -159,6 +165,6 @@ enum ReplayCrashRecovery {
         let configured = marker ?? index?.limitSeconds
         let requested = configured.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? duration
         let intervals = valid.map { item in SpySourceInterval(start: item.order, end: item.order + item.duration) }
-        return SpySnapshot(directory: directory, urls: valid.map(\.url), requestedSeconds: min(duration, requested), skippedRecoveryFiles: skipped, sourceIntervals: intervals, markers: index?.markers ?? markerMetadata?.markers ?? [])
+        return SpySnapshot(directory: directory, urls: valid.map(\.url), requestedSeconds: min(duration, requested), skippedRecoveryFiles: skipped, sourceIntervals: intervals, markers: index?.markers ?? markerMetadata?.markers ?? [], captureSessionID: index?.sessionID)
     }
 }

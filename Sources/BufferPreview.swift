@@ -28,6 +28,8 @@ struct BufferPreview: Identifiable {
     var snapshot: SpySnapshot? = nil
     var separateAudio = false
     var initialMicrophoneEnabled = true
+    var recoveryOrigin: URL? = nil
+    var audioGains = AudioLevels()
     var addedMarkers: [ClipMarker] = []
     var momentMarkers: [ClipMarker] {
         let captured: [ClipMarker]
@@ -75,7 +77,7 @@ extension AppModel {
     }
 
     var canRefreshBufferPreview: Bool {
-        bufferPreview != nil && recording && !busy && !saving && !shuttingDown &&
+        bufferPreview != nil && bufferPreview?.recoveryOrigin == nil && recording && !busy && !saving && !shuttingDown &&
             !privacyPaused && !manualPrivacyPause && !privacy.isBlocked && minutes > 0 &&
             stats.frameCount > 0 && libraryAvailable
     }
@@ -105,6 +107,7 @@ extension AppModel {
                 throw SpyError.message("Обновление прервано. Прежний снимок остаётся открыт.")
             }
             replacement.initialMicrophoneEnabled = microphoneEnabled
+            replacement.audioGains = previous.audioGains
             if previous.snapshot?.captureSessionID == replacement.snapshot?.captureSessionID,
                let oldPlayback = previous.playback, let newPlayback = replacement.playback {
                 replacement.addedMarkers = previous.addedMarkers.compactMap { marker in
@@ -153,7 +156,7 @@ extension AppModel {
         let range = try PreviewRange(start: start, end: end ?? preview.clip.duration, duration: preview.clip.duration)
         let fullRange = try PreviewRange(start: 0, end: preview.clip.duration, duration: preview.clip.duration)
         let entireBuffer = range == fullRange
-        if let savedURL = (microphoneEnabled ? current.savedRanges : current.mutedSavedRanges)[range], FileManager.default.fileExists(atPath: savedURL.path) {
+        if current.audioGains == AudioLevels(), let savedURL = (microphoneEnabled ? current.savedRanges : current.mutedSavedRanges)[range], FileManager.default.fileExists(atPath: savedURL.path) {
             storeMarkers(MarkerTimeline.selected(current.momentMarkers, start: range.start, end: range.end), for: savedURL)
             return savedURL
         }
@@ -167,10 +170,10 @@ extension AppModel {
         do {
             guard libraryAvailable else { throw SpyError.message("Папка сохранения недоступна. Подключите диск или выберите другую папку; просмотр останется открыт.") }
             if let playback = preview.playback {
-                try await playback.export(range: range, to: partial, separateAudio: preview.separateAudio, editableMicrophone: true, microphoneEnabled: microphoneEnabled)
-            } else if !microphoneEnabled {
+                try await playback.export(range: range, to: partial, separateAudio: preview.separateAudio, editableMicrophone: true, microphoneEnabled: microphoneEnabled, gains: current.audioGains)
+            } else if !microphoneEnabled || current.audioGains != AudioLevels() {
                 let source = try await EditableVideoAudio.load(url: preview.clip.url)
-                try await source.export(to: partial, start: range.start, end: range.end, microphoneEnabled: false)
+                try await source.export(to: partial, start: range.start, end: range.end, microphoneEnabled: microphoneEnabled, levels: current.audioGains)
             } else if entireBuffer {
                 try await Task.detached(priority: .userInitiated) { try FileManager.default.copyItem(at: preview.clip.url, to: partial) }.value
             } else {
@@ -178,9 +181,10 @@ extension AppModel {
             }
             try FileManager.default.moveItem(at: partial, to: destination)
             storeMarkers(MarkerTimeline.selected(current.momentMarkers, start: range.start, end: range.end), for: destination)
-            if microphoneEnabled { bufferPreview?.savedRanges[range] = destination }
-            else { bufferPreview?.mutedSavedRanges[range] = destination }
-            if entireBuffer && microphoneEnabled { bufferPreview?.savedURL = destination }
+            if current.audioGains == AudioLevels(), microphoneEnabled { bufferPreview?.savedRanges[range] = destination }
+            else if current.audioGains == AudioLevels() { bufferPreview?.mutedSavedRanges[range] = destination }
+            if entireBuffer && microphoneEnabled && current.audioGains == AudioLevels() { bufferPreview?.savedURL = destination }
+            if current.recoveryOrigin == nil || current.snapshot?.captureSessionID != nil { sessions.saved(destination, session: current.snapshot?.captureSessionID) }
             await reloadClips()
             message = (entireBuffer ? "Видео из просмотра сохранено · " : "Фрагмент сохранён · ") + preciseClock(range.duration)
             let savedBytes = clips.first(where: { $0.url == destination })?.bytes ?? 0
@@ -229,16 +233,17 @@ struct BufferPreviewSheet: View {
     private var range: PreviewRange? { try? PreviewRange(start: start, end: end, duration: duration) }
     private var entireBuffer: Bool { range == (try? PreviewRange(start: 0, end: duration, duration: duration)) }
     private var savedURL: URL? {
-        guard let range, let url = (microphoneEnabled ? model.bufferPreview?.savedRanges : model.bufferPreview?.mutedSavedRanges)?[range],
+        guard model.bufferPreview?.audioGains == AudioLevels(), let range, let url = (microphoneEnabled ? model.bufferPreview?.savedRanges : model.bufferPreview?.mutedSavedRanges)?[range],
               FileManager.default.fileExists(atPath: url.path) else { return nil }
         return url
     }
     var body: some View {
+        ScrollView {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 SpyMark().fill(Theme.accent).frame(width: 18, height: 28)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Просмотр буфера").font(.system(size: 17, weight: .semibold))
+                    Text(preview.recoveryOrigin == nil ? "Просмотр буфера" : "Просмотр восстановления").font(.system(size: 17, weight: .semibold))
                     Text("\(preciseClock(preview.clip.duration)) · \(fileSize(preview.clip.bytes)) в буфере")
                         .font(.system(size: 11)).foregroundStyle(Theme.muted)
                     Text("Снимок на \(preview.snapshotTimeLabel). Новые действия не входят.")
@@ -258,7 +263,7 @@ struct BufferPreviewSheet: View {
                         else { Image(systemName: "arrow.clockwise") }
                         Text(model.preparingBufferPreview ? "Обновляю…" : "Обновить буфер")
                     }
-                }.buttonStyle(.bordered).controlSize(.small).disabled(!model.canRefreshBufferPreview)
+                }.buttonStyle(.bordered).controlSize(.small).disabled(!model.canRefreshBufferPreview || preview.recoveryOrigin != nil)
                     .help("Получить новые кадры. Границы выбранного фрагмента будут сброшены.")
                 Text(savedURL == nil ? "НЕ СОХРАНЕНО" : entireBuffer ? "В БИБЛИОТЕКЕ" : "ФРАГМЕНТ СОХРАНЁН")
                     .font(.system(size: 9, weight: .semibold)).tracking(0.8)
@@ -274,6 +279,7 @@ struct BufferPreviewSheet: View {
             FullSizePlayer(player: player, title: "Просмотр буфера", editor: editor).frame(height: 290)
             FramePlaybackToolbar(editor: editor).padding(.horizontal, 20).padding(.top, 8)
             if let audioControls {
+                WaveformMixerView(controls: audioControls, editor: editor).padding(.horizontal, 20).disabled(model.saving)
                 VideoMicrophoneView(controls: audioControls, onChange: { microphoneEnabled = $0 })
                     .padding(.horizontal, 20).padding(.top, 10).disabled(model.saving)
             }
@@ -309,7 +315,7 @@ struct BufferPreviewSheet: View {
                 }.buttonStyle(.bordered)
             }.padding(20)
         }
-        .frame(width: 760).foregroundStyle(.white).background(Theme.background)
+        }.frame(width: 760).frame(maxHeight: min(1100, (NSScreen.main?.visibleFrame.height ?? 1000) - 80)).foregroundStyle(.white).background(Theme.background)
         .preferredColorScheme(.dark).tint(Theme.accent).interactiveDismissDisabled(model.saving)
         .task(id: preview.id) {
             releasePlayer()
@@ -325,6 +331,11 @@ struct BufferPreviewSheet: View {
                 try Task.checkCancellation()
                 guard model.bufferPreview?.id == previewID else { return }
                 sound.microphoneEnabled = microphoneEnabled
+                sound.systemGain = Double(preview.audioGains.system); sound.microphoneGain = Double(preview.audioGains.microphone)
+                sound.onGainsChanged = { [weak sound, weak model] in
+                    guard let sound, let model, model.bufferPreview?.id == previewID else { return }
+                    model.bufferPreview?.audioGains = sound.gains
+                }
                 audioControls = sound; item = sound.item
                 player = AVPlayer(playerItem: item)
                 if model.previewMode { player?.isMuted = true }
@@ -348,7 +359,7 @@ struct BufferPreviewSheet: View {
                         model.journal.record(.error, "Воспроизведение буфера", describeError(error))
                     }
                 }
-                player?.play()
+                if preview.recoveryOrigin == nil { player?.play() }
             } catch {
                 if !Task.isCancelled {
                     playbackError = error.localizedDescription

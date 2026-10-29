@@ -204,7 +204,7 @@ struct FullSizePlayer: NSViewRepresentable {
                 if event.type == .keyUp { self?.close() }
                 return nil
             }
-            activityMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .leftMouseDragged, .rightMouseDown, .scrollWheel, .keyDown]) { [weak self] event in
+            activityMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .rightMouseUp, .scrollWheel, .keyDown]) { [weak self] event in
                 if event.window === self?.panel { self?.noteInteraction(at: event.locationInWindow) }
                 return event
             }
@@ -228,15 +228,23 @@ struct FullSizePlayer: NSViewRepresentable {
         guard panel != nil, !chromePinned else { return }
         idleTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: UInt64((self?.chromeIdleInterval ?? 2.5) * 1_000_000_000)) } catch { return }
-            guard let self, self.panel != nil else { return }
-            let pointerOverControls = self.lastPointer.map { point in
-                (self.controlsContainer?.frame.contains(point) ?? false) ||
-                (self.exitButton?.frame.contains(point) ?? false) || (self.pinButton?.frame.contains(point) ?? false)
-            } ?? false
-            guard !self.chromePinned, self.host?.playerView.player?.rate ?? 0 > 0,
-                  self.host?.editor?.isSaving != true, self.host?.editor?.isStepping != true,
-                  self.host?.editor?.isSeeking != true, !pointerOverControls, NSEvent.pressedMouseButtons == 0 else { return }
-            self.setChromeHidden(true)
+            while !Task.isCancelled {
+                guard let self, self.panel != nil else { return }
+                let pointerOverControls = self.lastPointer.map { point in
+                    (self.controlsContainer?.frame.contains(point) ?? false) ||
+                    (self.exitButton?.frame.contains(point) ?? false) || (self.pinButton?.frame.contains(point) ?? false)
+                } ?? false
+                guard !self.chromePinned, self.host?.playerView.player?.rate ?? 0 > 0, !pointerOverControls else { return }
+                if self.host?.editor?.isSaving == true || self.host?.editor?.isStepping == true ||
+                    self.host?.editor?.isSeeking == true || NSEvent.pressedMouseButtons != 0 {
+                    // Finishing a seek or releasing a held mouse button must
+                    // not permanently consume the only scheduled idle check.
+                    do { try await Task.sleep(nanoseconds: 200_000_000) } catch { return }
+                    continue
+                }
+                self.setChromeHidden(true)
+                return
+            }
         }
     }
     func setControlsPinned(_ pinned: Bool) {

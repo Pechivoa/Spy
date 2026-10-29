@@ -47,7 +47,7 @@ final class EditableVideoAudio {
     }
 
     func export(to destination: URL, start: Double = 0, end: Double? = nil,
-                microphoneEnabled: Bool = true, fileType: AVFileType = .mov) async throws {
+                microphoneEnabled: Bool = true, levels: AudioLevels = AudioLevels(), fileType: AVFileType = .mov) async throws {
         let duration = try await asset.load(.duration).seconds
         let range = try PreviewRange(start: start, end: end ?? duration, duration: duration)
         let selected = CMTimeRange(start: CMTime(seconds: range.start, preferredTimescale: 60_000),
@@ -57,16 +57,18 @@ final class EditableVideoAudio {
         try targetVideo.insertTimeRange(selected, of: video, at: .zero)
         targetVideo.preferredTransform = video.preferredTransform
         var selectedAudio: [AVMutableCompositionTrack] = [], selectedNames: [CMPersistentTrackID: String] = [:]
+        var selectedVolumes: [CMPersistentTrackID: Float] = [:]
         for track in audio where microphoneEnabled || !microphoneIDs.contains(track.trackID) {
             let intersection = CMTimeRangeGetIntersection(selected, otherRange: track.timeRange)
             guard intersection.duration > .zero else { continue }
             guard let target = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw SpyError.message("Не удалось подготовить звук.") }
             try target.insertTimeRange(intersection, of: track, at: intersection.start - selected.start)
             selectedAudio.append(target); selectedNames[target.trackID] = names[track.trackID]
+            selectedVolumes[target.trackID] = levels[microphoneIDs.contains(track.trackID) ? .microphone : .system]
         }
         if !selectedAudio.isEmpty {
             try await MixedAudioExporter.export(composition, video: targetVideo, audio: selectedAudio, to: destination,
-                separate: fileType == .mov, names: selectedNames, fileType: fileType, progress: { _ in })
+                volumes: selectedVolumes, separate: fileType == .mov, names: selectedNames, fileType: fileType, progress: { _ in })
         } else {
             guard let exporter = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else { throw SpyError.message("Экспорт видео недоступен.") }
             exporter.outputURL = destination; exporter.outputFileType = fileType
@@ -84,6 +86,10 @@ final class EditableVideoAudio {
     private let retainedSource: EditableVideoAudio?
     private let volumes: [CMPersistentTrackID: Float]
     @Published var microphoneEnabled = true { didSet { apply() } }
+    @Published var systemGain: Double = 1 { didSet { apply(); onGainsChanged?() } }
+    @Published var microphoneGain: Double = 1 { didSet { apply(); onGainsChanged?() } }
+    var onGainsChanged: (() -> Void)?
+    var gains: AudioLevels { AudioLevels(system: Float(systemGain), microphone: Float(microphoneGain)) }
     var canMuteMicrophone: Bool { !microphoneIDs.isEmpty }
 
     init(item: AVPlayerItem, microphoneIDs: Set<CMPersistentTrackID>, volumes: [CMPersistentTrackID: Float],
@@ -104,7 +110,7 @@ final class EditableVideoAudio {
         mix.inputParameters = volumes.map { id, volume in
             let value = AVMutableAudioMixInputParameters()
             value.trackID = id
-            value.setVolume(!microphoneEnabled && microphoneIDs.contains(id) ? 0 : volume, at: .zero)
+            value.setVolume(!microphoneEnabled && microphoneIDs.contains(id) ? 0 : volume * gains[microphoneIDs.contains(id) ? .microphone : .system], at: .zero)
             return value
         }
         item.audioMix = mix

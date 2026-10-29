@@ -18,10 +18,12 @@ struct PlayerSheet: View {
     @State private var result: URL?
     @State private var trimError: String?
     private var current: Clip { model.clips.first(where: { $0.id == clip.id }) ?? clip }
+    private var audioLevels: AudioLevels { audioControls?.gains ?? AudioLevels() }
     private var duration: Double { max(0.001, clip.duration) }
     private var frameStep: Double { max(1.0 / 60_000, editor.frameDuration) }
     private var momentMarkers: [ClipMarker] { model.metadata.get(current.url).markers }
     var body: some View {
+        ScrollView {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
@@ -31,7 +33,7 @@ struct PlayerSheet: View {
                 Spacer()
                 Button { model.toggleFavorite(current) } label: { Image(systemName: current.favorite ? "star.fill" : "star").foregroundStyle(current.favorite ? Color.orange : Color.white) }.help("Избранное")
                 Button { rename = true } label: { Image(systemName: "pencil") }.help("Назвать видео")
-                Button { Task { await model.exportMP4(clip, microphoneEnabled: microphoneEnabled) } } label: { Text("MP4") }.help("Экспортировать с выбранным звуком").disabled(model.saving)
+                Button { Task { await model.exportMP4(clip, microphoneEnabled: microphoneEnabled, levels: audioLevels) } } label: { Text("MP4") }.help("Экспортировать с выбранным звуком").disabled(model.saving)
                 Button { model.reveal(clip) } label: { Image(systemName: "folder") }.help("Показать в Finder")
                 Button { deleteAlert = true } label: { Image(systemName: "trash") }.help("Удалить видео").disabled(model.saving || model.cleanupBusy)
                 Button("Закрыть") { dismiss() }.keyboardShortcut(.cancelAction).disabled(model.saving)
@@ -47,17 +49,19 @@ struct PlayerSheet: View {
             FullSizePlayer(player: player, title: current.title, editor: editor).frame(height: 380)
             FramePlaybackToolbar(editor: editor).padding(.horizontal, 20).padding(.top, 8)
             if let audioControls {
+                WaveformMixerView(controls: audioControls, editor: editor).padding(.horizontal, 20).disabled(model.saving)
                 VideoMicrophoneView(controls: audioControls, onChange: { microphoneEnabled = $0 }, saveCopy: {
                     player?.pause(); result = nil; trimError = nil
                     Task {
-                        do { result = try await model.trimClip(clip, start: 0, end: clip.duration, microphoneEnabled: false) }
+                        do { result = try await model.trimClip(clip, start: 0, end: clip.duration, microphoneEnabled: false, levels: audioLevels) }
                         catch { trimError = error.localizedDescription }
                     }
                 }).padding(.horizontal, 20).padding(.top, 10).disabled(model.saving)
             }
             MomentMarkerStrip(markers: momentMarkers, onSeek: seek).padding(.horizontal, 20)
             trimControls.padding(20)
-        }.frame(width: 900).background(Theme.background).preferredColorScheme(.dark).tint(Theme.accent)
+        }
+        }.frame(width: 900).frame(maxHeight: min(1100, (NSScreen.main?.visibleFrame.height ?? 1000) - 80)).background(Theme.background).preferredColorScheme(.dark).tint(Theme.accent)
             .task(id: clip.url) {
                 end = clip.duration
                 let item: AVPlayerItem
@@ -84,7 +88,7 @@ struct PlayerSheet: View {
                         editor.setMarkers(model.metadata.get(current.url).markers)
                     },
                     onSave: { first, last, microphone in
-                        let url = try await model.trimClip(clip, start: first, end: last, microphoneEnabled: microphone)
+                        let url = try await model.trimClip(clip, start: first, end: last, microphoneEnabled: microphone, levels: audioLevels)
                         result = url
                         return "Сохранено · " + url.lastPathComponent
                     })
@@ -132,7 +136,7 @@ struct PlayerSheet: View {
                 Button(model.saving ? "Сохраняется…" : "Сохранить фрагмент") {
                     player?.pause(); result = nil; trimError = nil
                     Task {
-                        do { result = try await model.trimClip(clip, start: start, end: end, microphoneEnabled: microphoneEnabled) }
+                        do { result = try await model.trimClip(clip, start: start, end: end, microphoneEnabled: microphoneEnabled, levels: audioLevels) }
                         catch { trimError = error.localizedDescription }
                     }
                 }.buttonStyle(.borderedProminent).disabled(!editor.canSave || player == nil)

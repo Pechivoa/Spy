@@ -63,6 +63,7 @@ import Foundation
         let destination = libraryURL.appendingPathComponent(stem + ".mov").spyFileURL
         if FileManager.default.fileExists(atPath: destination.path) {
             storeMarkers(job.markers, for: destination)
+            sessions.saved(destination, session: job.snapshot.captureSessionID)
             return destination
         }
         guard libraryAvailable else { throw SpyError.message("Папка видео недоступна. Автоклип оставлен для восстановления.") }
@@ -84,6 +85,7 @@ import Foundation
             try await job.playback.export(range: job.range, to: partial, separateAudio: job.separateAudio, editableMicrophone: true)
             try FileManager.default.moveItem(at: partial, to: destination)
             storeMarkers(job.markers, for: destination)
+            sessions.saved(destination, session: job.snapshot.captureSessionID)
             await reloadClips()
             if let clip = clips.first(where: { $0.url == destination }), !shuttingDown {
                 notifySaved(clip, title: "Автоклип сохранён")

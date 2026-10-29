@@ -77,9 +77,9 @@ enum MediaSharing {
         }
         return (result, video, audio)
     }
-    static func exportMP4(source: URL, to destination: URL, microphoneEnabled: Bool = true) async throws {
+    static func exportMP4(source: URL, to destination: URL, microphoneEnabled: Bool = true, levels: AudioLevels = AudioLevels()) async throws {
         let video = try await EditableVideoAudio.load(url: source)
-        try await video.export(to: destination, microphoneEnabled: microphoneEnabled, fileType: .mp4)
+        try await video.export(to: destination, microphoneEnabled: microphoneEnabled, levels: levels, fileType: .mp4)
     }
     @MainActor static func playerItem(url: URL) async throws -> AVPlayerItem {
         let asset = AVURLAsset(url: url)

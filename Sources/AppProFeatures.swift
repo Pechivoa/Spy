@@ -16,6 +16,18 @@ import UniformTypeIdentifiers
         hud.update(HUDState(recording: recording && !privacyPaused, manual: manualRecording, seconds: manualRecording ? stats.manualSeconds : stats.seconds, bytes: manualRecording ? stats.manualBytes : stats.bytes, battery: batterySaving && onBattery), enabled: hudEnabled, displayID: displayID, corner: hudCorner)
     }
     func setupProFeatures() {
+        captureHealth.onChange = { [weak self] warnings in
+            guard let self else { return }
+            self.journal.record(warnings.isEmpty ? .info : .warning, "Контроль записи", warnings.isEmpty ? "Предупреждения контроля записи сняты." : warnings.joined(separator: "\n"))
+            if !warnings.isEmpty { self.sessions.event("warning", warnings.joined(separator: " ")) }
+        }
+        healthTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.recording { self.sessions.touch() }
+                self.captureHealth.check(active: self.recording && !self.shuttingDown, paused: self.privacyPaused || self.privacy.isBlocked || self.busy)
+            }
+        }
         updates.canInstall = { [weak self] in
             guard let self else { return false }
             return !self.manualRecording && !self.busy && !self.saving && !self.diagnosticsBusy && !self.shuttingDown
@@ -182,6 +194,7 @@ import UniformTypeIdentifiers
             } catch { journal.record(.warning, "Очистка восстановления", "Видео сохранено, но исходная папка оставлена для защиты неэкспортированных файлов.\n" + snapshot.directory.path + "\n" + describeError(error)) }
             await reloadClips()
             if let clip = clips.first(where: { $0.url == destination }) { if !shuttingDown { notifySaved(clip, title: "Запись сохранена") }; message = (replaySession ? "Последняя сессия сохранена · " : "Ручная запись сохранена · ") + clockText(clip.duration) }
+            sessions.saved(destination, session: snapshot.captureSessionID)
             journal.record(.info, replaySession ? "Автосохранение" : "Ручная запись", "Сохранено " + destination.lastPathComponent)
             if autoCleanup { await cleanupLibrary(protecting: [destination]) }
         } catch { try? FileManager.default.removeItem(at: partial); throw error }
@@ -189,7 +202,7 @@ import UniformTypeIdentifiers
     func refreshRecoveryFolders() {
         recoveryFolders = ((try? FileManager.default.contentsOfDirectory(at: cacheURL, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .creationDateKey])) ?? []).filter {
             guard !autoMomentClips.isProcessing(directory: $0) else { return false }
-            guard $0.lastPathComponent.hasPrefix("record-"), let values = try? $0.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { return false }
+            guard ($0.lastPathComponent.hasPrefix("record-") || $0.lastPathComponent.hasPrefix("recovery-retained-")), let values = try? $0.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { return false }
             return values.isDirectory == true && values.isSymbolicLink != true
         }.sorted {
             let left = (try? $0.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
@@ -208,26 +221,27 @@ import UniformTypeIdentifiers
         }
         catch { showError(error.localizedDescription, topic: "Восстановление записи", details: describeError(error)) }
     }
-    func exportMP4(_ clip: Clip, microphoneEnabled: Bool = true) async {
+    func exportMP4(_ clip: Clip, microphoneEnabled: Bool = true, levels: AudioLevels = AudioLevels()) async {
         guard !saving, !cleanupBusy else { return }
         let panel = NSSavePanel(); panel.title = "Экспортировать MP4"
         panel.allowedContentTypes = [.mpeg4Movie]; panel.canCreateDirectories = true
         panel.nameFieldStringValue = clip.url.deletingPathExtension().lastPathComponent + ".mp4"
         guard panel.runModal() == .OK, let destination = panel.url else { return }
-        do { try await exportMP4(clip, destination: destination, microphoneEnabled: microphoneEnabled) }
+        do { try await exportMP4(clip, destination: destination, microphoneEnabled: microphoneEnabled, levels: levels) }
         catch { showError(error.localizedDescription, topic: "Экспорт MP4", details: describeError(error)) }
     }
-    func exportMP4(_ clip: Clip, destination: URL, microphoneEnabled: Bool = true) async throws {
+    func exportMP4(_ clip: Clip, destination: URL, microphoneEnabled: Bool = true, levels: AudioLevels = AudioLevels()) async throws {
         guard !saving else { throw SpyError.message("Дождитесь текущего сохранения.") }
         guard clip.url.spyFileURL != destination.spyFileURL else { throw SpyError.message("Выберите другой файл, чтобы сохранить оригинал.") }
         saving = true
         defer { saving = false; Task { await reconcilePendingChanges() } }
         let partial = destination.deletingLastPathComponent().appendingPathComponent(".Spy-export-" + UUID().uuidString + ".mp4")
         do {
-            try await MediaSharing.exportMP4(source: clip.url, to: partial, microphoneEnabled: microphoneEnabled)
+            try await MediaSharing.exportMP4(source: clip.url, to: partial, microphoneEnabled: microphoneEnabled, levels: levels)
             if FileManager.default.fileExists(atPath: destination.path) { _ = try FileManager.default.replaceItemAt(destination, withItemAt: partial) }
             else { try FileManager.default.moveItem(at: partial, to: destination) }
             message = "MP4 экспортирован · " + destination.lastPathComponent
+            sessions.copied(destination, from: clip.url)
             journal.record(.info, "Экспорт MP4", destination.path)
             if destination.deletingLastPathComponent().path == libraryURL.path { await reloadClips() }
         } catch { try? FileManager.default.removeItem(at: partial); throw error }

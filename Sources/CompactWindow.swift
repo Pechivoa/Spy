@@ -112,6 +112,7 @@ struct SpyWindowView: View {
             if !model.previewMode { model.showMainWindow = { openWindow(id: "main") } }
         }
         .onChange(of: model.recording) { _, value in window.recording = value }
+        .onChange(of: model.section) { _, value in if [6, 7, 8].contains(value) { window.showExpanded() } }
         .sheet(item: Binding(get: { model.bufferPreview }, set: { value in
             if value == nil { model.closeBufferPreview() }
         })) { preview in
@@ -130,12 +131,16 @@ struct SpyWindowView: View {
                     }.allowsHitTesting(false)
                 }.frame(maxWidth: .infinity).frame(height: 30)
                 .help("Перетащите окно за эту область")
+            CaptureHealthBadge(health: model.captureHealth) { model.section = 3; window.showExpanded() }
             Menu {
                 navigation("Мгновенный повтор", section: 0)
                 navigation("Библиотека", section: 1)
                 navigation("Настройки", section: 2)
                 navigation("Профили", section: 4)
                 navigation("Дополнительно", section: 5)
+                navigation("Восстановление", section: 6)
+                navigation("Хранилище", section: 7)
+                navigation("История сессий", section: 8)
                 navigation("Журнал ошибок", section: 3)
                 Divider()
                 Button("Добавить метку · " + model.shortcuts.marker.label) { model.addMomentMarker() }
@@ -219,7 +224,7 @@ struct CompactSpyView: View {
                 Spacer()
                 if tiny && !model.recoveryFolders.isEmpty {
                     Button("Восстановить") {
-                        if let folder = model.recoveryFolders.last { Task { await model.recoverRecording(folder) } }
+                        model.section = 6; window.showExpanded()
                     }.buttonStyle(.plain).foregroundStyle(Theme.accent)
                         .disabled(model.saving || model.busy || model.manualRecording)
                 } else { Text("из " + model.effectiveDurationLabel) }

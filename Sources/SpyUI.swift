@@ -147,8 +147,9 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     header.id("capture-top")
+                    CaptureHealthView(health: model.captureHealth, showJournal: { model.section = 3 })
                     CaptureRecoveryNotice(recovery: model.captureRecovery, onCancel: model.cancelCaptureRecovery)
-                    if !model.recoveryFolders.isEmpty { RecoveryNotice(model: model) }
+                    if !model.recoveryFolders.isEmpty && model.section != 6 { RecoveryNotice(model: model) }
                     if let issue = model.captureIssue { captureProblem(issue) }
                     if let message = model.message {
                         HStack(spacing: 10) {
@@ -167,6 +168,12 @@ struct ContentView: View {
                         ProfilesView(model: model)
                     } else if model.section == 5 {
                         ProSettingsView(model: model)
+                    } else if model.section == 6 {
+                        RecoveryCenterView(model: model)
+                    } else if model.section == 7 {
+                        StorageCenterView(model: model)
+                    } else if model.section == 8 {
+                        SessionHistoryView(history: model.sessions, model: model)
                     } else if model.section == 3 {
                         JournalView(model: model, journal: journal)
                     }
@@ -214,6 +221,9 @@ struct ContentView: View {
             navItem("Настройки", icon: "slider.horizontal.3", section: 2)
             navItem("Профили", icon: "square.stack.3d.up", section: 4)
             navItem("Дополнительно", icon: "gearshape.2", section: 5)
+            navItem("Восстановление", icon: "arrow.counterclockwise.circle", section: 6)
+            navItem("Хранилище", icon: "internaldrive", section: 7)
+            navItem("История сессий", icon: "clock.arrow.circlepath", section: 8)
             navItem("Журнал ошибок", icon: "text.document", section: 3)
             Spacer()
             VStack(alignment: .leading, spacing: 13) {
@@ -228,7 +238,7 @@ struct ContentView: View {
                     Text("\(fileSize(model.freeSpace)) свободно").font(.system(size: 11)).foregroundStyle(Theme.muted)
                 }
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(Theme.panel, in: RoundedRectangle(cornerRadius: 14))
-            Text("SPY FOR MAC  /  1.12.1").font(.system(size: 9, weight: .medium)).tracking(1.4).foregroundStyle(Theme.muted.opacity(0.6)).padding(.top, 20).padding(.bottom, 24)
+            Text("SPY FOR MAC  /  1.13.0").font(.system(size: 9, weight: .medium)).tracking(1.4).foregroundStyle(Theme.muted.opacity(0.6)).padding(.top, 20).padding(.bottom, 24)
         }.padding(.horizontal, 16).frame(width: 210).background(Theme.sidebar)
             .overlay(alignment: .trailing) { Rectangle().fill(Theme.border).frame(width: 1) }
     }
@@ -249,9 +259,9 @@ struct ContentView: View {
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 8) {
-                Text(model.section == 0 ? "Запись и повторы" : model.section == 1 ? "Библиотека видео" : model.section == 3 ? "Журнал ошибок" : model.section == 4 ? "Профили приложений" : model.section == 5 ? "Сессия и автосохранение" : "Настройки записи")
+                Text(model.section == 0 ? "Запись и повторы" : model.section == 1 ? "Библиотека видео" : model.section == 3 ? "Журнал ошибок" : model.section == 4 ? "Профили приложений" : model.section == 5 ? "Сессия и автосохранение" : model.section == 6 ? "Центр восстановления" : model.section == 7 ? "Хранилище Spy" : model.section == 8 ? "История сессий" : "Настройки записи")
                     .font(.system(size: 24, weight: .semibold)).tracking(-0.5)
-                Text(model.section == 0 ? "Последние минуты всегда под рукой." : model.section == 1 ? "Предпросмотр, монтаж и сохранённые моменты." : model.section == 3 ? "События, диагностика и экспорт в TXT." : model.section == 4 ? "Свои настройки для каждого приложения." : model.section == 5 ? "Восстановление, индикатор и работа в фоне." : "Источники, качество, звук и горячие клавиши.")
+                Text(model.section == 0 ? "Последние минуты всегда под рукой." : model.section == 1 ? "Предпросмотр, монтаж и сохранённые моменты." : model.section == 3 ? "События, диагностика и экспорт в TXT." : model.section == 4 ? "Свои настройки для каждого приложения." : model.section == 5 ? "Восстановление, индикатор и работа в фоне." : model.section == 6 ? "Предпросмотр и сохранение незавершённых записей." : model.section == 7 ? "Размеры данных и выбранная очистка через Корзину." : model.section == 8 ? "Запись, паузы и сохранённые моменты." : "Источники, качество, звук и горячие клавиши.")
                     .font(.system(size: 13)).foregroundStyle(Theme.muted)
             }
             Spacer()

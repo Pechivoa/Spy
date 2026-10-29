@@ -139,7 +139,7 @@ final class BufferPlayback {
 
     /// Export only after confirmation, from the same immutable edit list and
     /// frozen source gains used for playback. H.264 packets pass through intact.
-    func export(range: PreviewRange, to destination: URL, separateAudio: Bool, editableMicrophone: Bool = false, microphoneEnabled: Bool = true) async throws {
+    func export(range: PreviewRange, to destination: URL, separateAudio: Bool, editableMicrophone: Bool = false, microphoneEnabled: Bool = true, gains: AudioLevels = AudioLevels()) async throws {
         guard let sourceVideo = try await asset.loadTracks(withMediaType: .video).first else { throw SpyError.message("Нет видеодорожки.") }
         let composition = AVMutableComposition()
         guard let video = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw SpyError.message("Не удалось сохранить видео.") }
@@ -156,7 +156,7 @@ final class BufferPlayback {
             let intersection = CMTimeRangeGetIntersection(selected, otherRange: try await source.load(.timeRange))
             guard intersection.duration > .zero else { composition.removeTrack(target); continue }
             try target.insertTimeRange(intersection, of: source, at: intersection.start - selected.start)
-            audio.append(target); volumes[target.trackID] = levels[kind]; names[target.trackID] = kind.rawValue
+            audio.append(target); volumes[target.trackID] = levels[kind] * gains[kind]; names[target.trackID] = kind.rawValue
         }
         if !audio.isEmpty {
             try await MixedAudioExporter.export(composition, video: video, audio: audio, to: destination, volumes: volumes, separate: separateAudio || (editableMicrophone && names.values.contains(AudioSource.microphone.rawValue)), names: names, progress: { _ in })

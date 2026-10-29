@@ -45,6 +45,7 @@ import ScreenCaptureKit
         captureFailure = value
         captureIssue = value
         journal.record(.error, "Запись", value)
+        sessions.event("failure", value)
         // A failure during start must be handled by start's catch. Dropping
         // stop() because busy is true used to leave a false "recording" state.
         guard startupStatus == nil else { return }

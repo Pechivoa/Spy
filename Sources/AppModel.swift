@@ -50,6 +50,9 @@ final class AppModel: ObservableObject {
     let applicationAudio: ApplicationAudioSelection
     let captureTuning: CaptureTuningSettings
     lazy var captureRecovery = CaptureRecovery(defaults: preferences)
+    lazy var captureHealth = CaptureHealth()
+    lazy var sessions = SessionHistory(url: journal.fileURL.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Sessions.json"))
+    var healthTimer: Timer?
     lazy var updates = AppUpdates(loadReceipt: !previewMode)
     @Published var applicationAudioIssue: String?
     @Published var microphone: Bool { didSet { preferences.set(microphone, forKey: "microphone") } }
@@ -84,7 +87,19 @@ final class AppModel: ObservableObject {
     @Published var displayID: CGDirectDisplayID = CGMainDisplayID() {
         didSet { preferences.set(Int(displayID), forKey: "displayID"); rememberDisplayIdentity() }
     }
-    @Published var recording = false { didSet { updateHUD(); automationRuntimeChanged() } }
+    @Published var recording = false { didSet {
+        updateHUD(); automationRuntimeChanged()
+        guard oldValue != recording else { return }
+        if recording {
+            let id = engine.captureProgress()?.sessionID ?? UUID()
+            captureHealth.reset(session: id)
+            captureHealth.sample.wantsSystem = systemAudio; captureHealth.sample.wantsMicrophone = microphone
+            sessions.begin(id: id, source: (captureMode == .display ? (selectedDisplay?.name ?? "Экран") : "Окно") + " · " + effectiveQuality.title)
+        } else {
+            sessions.end(reason: captureFailure ?? "Запись остановлена")
+            captureHealth.check(active: false, paused: false)
+        }
+    } }
     @Published var busy = false { didSet { automationRuntimeChanged(); if !busy { flushCaptureFailure(); if pendingPrivacyUpdate { Task { await reconcilePrivacyState() } } } } }
     @Published var manualSaving = false { didSet { automationRuntimeChanged() } }
     @Published var autoClipExports = 0 { didSet { automationRuntimeChanged() } }
@@ -104,7 +119,10 @@ final class AppModel: ObservableObject {
         self?.refreshRecoveryFolders()
     })
     @Published var preparingBufferPreview = false
-    @Published var privacyPaused = false { didSet { updateHUD(); automationRuntimeChanged() } }
+    @Published var privacyPaused = false { didSet {
+        updateHUD(); automationRuntimeChanged()
+        if oldValue != privacyPaused && recording { if !privacyPaused { captureHealth.snooze() }; sessions.event(privacyPaused ? "pause" : "resume", privacyPaused ? "Пауза приватности" : "Запись продолжена") }
+    } }
     @Published var manualPrivacyPause = false
     var privacyTransitionRunning = false
     var pendingPrivacyUpdate = false
@@ -225,6 +243,7 @@ final class AppModel: ObservableObject {
         try? FileManager.default.createDirectory(at: cacheURL, withIntermediateDirectories: true)
         if preview || defaults.string(forKey: "libraryPath") == nil { try? FileManager.default.createDirectory(at: libraryURL, withIntermediateDirectories: true) }
         engine.onStats = { [weak self] value in Task { @MainActor in self?.stats = value } }
+        engine.onTelemetry = { [weak self] value in Task { @MainActor in self?.captureHealth.receive(value) } }
         engine.onFailure = { [weak self] value in
             Task { @MainActor in
                 guard let self else { return }
@@ -248,7 +267,7 @@ final class AppModel: ObservableObject {
         refreshDisplays()
         refreshMicrophones()
         if preview { return }
-        journal.record(.info, "Запуск", "Spy 1.12.1 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
+        journal.record(.info, "Запуск", "Spy 1.13.0 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
         if let issue = metadata.loadError { journal.record(.error, "Данные библиотеки", "Автоочистка приостановлена для защиты избранного.\n" + metadata.url.path + "\n" + issue) }
         hotkeys = HotKeys(bindings: shortcuts) { [weak self] id in
             Task { @MainActor in
@@ -456,11 +475,12 @@ final class AppModel: ObservableObject {
         busy = true
         await flushAutoMoments()
         let retain = preserveReplayIntent && captureFailure != nil
+        let previousRecovery = Set(recoveryFolders.map { $0.path })
         await engine.stop(preserveForRecovery: retain)
         privacyPaused = false
         recording = false; stats = BufferStats(); audioMeter = AudioMeter(); busy = false
         journal.record(.info, "Буфер", retain ? "Запись остановлена после ошибки; готовые сегменты оставлены для восстановления." : "Запись остановлена, временный буфер очищен.")
-        if retain { refreshRecoveryFolders() }
+        if retain { refreshRecoveryFolders(); sessions.retain(recoveryFolders.filter { !previousRecovery.contains($0.path) }, session: sessions.sessions.last?.id) }
         if let activity { ProcessInfo.processInfo.endActivity(activity); self.activity = nil }
         refreshDisk()
         if processPending { Task { await reconcilePendingChanges() } }
@@ -513,6 +533,7 @@ final class AppModel: ObservableObject {
             }
         }
         if manualRecording { await finishManual(stopCapture: true) }
+        healthTimer?.invalidate(); healthTimer = nil
         hud.hide(); cleanupTimer?.invalidate(); libraryMonitor?.stop(); privacy.uninstall(); performance.stop()
         await engine.stop(); recording = false; endCaptureActivity()
         if let replay {
@@ -546,6 +567,7 @@ final class AppModel: ObservableObject {
             try await SpyExporter.export(snapshot, to: partial, levels: levels, separateAudio: separateAudio, editableMicrophone: true)
             try FileManager.default.moveItem(at: partial, to: destination)
             storeMarkers(MarkerTimeline.positions(in: snapshot), for: destination)
+            sessions.saved(destination, session: snapshot.captureSessionID)
             await reloadClips()
             let saved = clips.first(where: { $0.url == destination })
             message = "Повтор сохранён · \(clockText(saved?.duration ?? seconds))"
