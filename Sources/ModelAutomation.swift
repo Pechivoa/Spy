@@ -18,7 +18,7 @@ import Foundation
             guard let self else { return GameAutoCaptureRuntime(recording: false, canStart: false, canStop: false) }
             let idle = !self.busy && !self.saving && !self.shuttingDown && !self.diagnosticsBusy && !self.switchingConfiguration
             return GameAutoCaptureRuntime(recording: self.recording,
-                canStart: idle && self.sessionRestorationFinished && !self.privacy.isBlocked && !self.manualPrivacyPause && self.minutes > 0,
+                canStart: idle && !self.captureRecovery.isPending && self.sessionRestorationFinished && !self.privacy.isBlocked && !self.manualPrivacyPause && self.minutes > 0,
                 canStop: idle && !self.manualRecording, manualRecording: self.manualRecording)
         }, start: { [weak self] in
             guard let self else { return .deferred }

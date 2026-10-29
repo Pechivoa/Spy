@@ -16,6 +16,11 @@ import UniformTypeIdentifiers
         hud.update(HUDState(recording: recording && !privacyPaused, manual: manualRecording, seconds: manualRecording ? stats.manualSeconds : stats.seconds, bytes: manualRecording ? stats.manualBytes : stats.bytes, battery: batterySaving && onBattery), enabled: hudEnabled, displayID: displayID, corner: hudCorner)
     }
     func setupProFeatures() {
+        updates.canInstall = { [weak self] in
+            guard let self else { return false }
+            return !self.manualRecording && !self.busy && !self.saving && !self.diagnosticsBusy && !self.shuttingDown
+        }
+        installCaptureRecovery()
         setupPrivacy()
         proObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in

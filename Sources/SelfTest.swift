@@ -167,6 +167,17 @@ enum SelfTest {
 
 @main struct SpyBootstrap {
     @MainActor static func main() async {
+        if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--spy-install-update" {
+            exit(SpyUpdateInstaller.helper(planURL: URL(fileURLWithPath: CommandLine.arguments[2])))
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--updater-test"), CommandLine.arguments.count > index + 1 {
+            do { try await AppUpdatesTests.run(directory: URL(fileURLWithPath: CommandLine.arguments[index + 1])); exit(0) }
+            catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--capture-recovery-test"), CommandLine.arguments.count > index + 1 {
+            do { try await CaptureRecoveryTests.run(directory: URL(fileURLWithPath: CommandLine.arguments[index + 1])); exit(0) }
+            catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--capture-tuning-test"), CommandLine.arguments.count > index + 1 {
             do {
                 let directory = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)

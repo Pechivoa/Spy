@@ -59,6 +59,7 @@ struct SpyApp: App {
                     Button(action.title) { Task { await model.saveSpy(seconds: action.seconds) } }.disabled(!model.canSave)
                 }
                 Divider()
+                Button("Проверить обновления Spy…") { model.section = 2; Task { await model.updates.check() } }
                 Button("Открыть папку видео") { model.openFolder() }
             }
         }
@@ -86,6 +87,7 @@ struct SpyApp: App {
         guard let model else { return .terminateNow }
         if terminating { return .terminateLater }
         if model.saving {
+            model.updates.cancelInstall()
             let alert = NSAlert()
             alert.messageText = "Видео ещё сохраняется"
             alert.informativeText = "Дождитесь завершения сохранения, затем закройте Spy."
@@ -93,7 +95,7 @@ struct SpyApp: App {
             return .terminateCancel
         }
         terminating = true
-        Task { let saved = await model.shutdown(); terminating = false; sender.reply(toApplicationShouldTerminate: saved) }
+        Task { let saved = await model.shutdown(); if !saved { model.updates.cancelInstall() }; terminating = false; sender.reply(toApplicationShouldTerminate: saved) }
         return .terminateLater
     }
 }
@@ -145,6 +147,7 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     header.id("capture-top")
+                    CaptureRecoveryNotice(recovery: model.captureRecovery, onCancel: model.cancelCaptureRecovery)
                     if !model.recoveryFolders.isEmpty { RecoveryNotice(model: model) }
                     if let issue = model.captureIssue { captureProblem(issue) }
                     if let message = model.message {
@@ -225,7 +228,7 @@ struct ContentView: View {
                     Text("\(fileSize(model.freeSpace)) свободно").font(.system(size: 11)).foregroundStyle(Theme.muted)
                 }
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(Theme.panel, in: RoundedRectangle(cornerRadius: 14))
-            Text("SPY FOR MAC  /  1.11.2").font(.system(size: 9, weight: .medium)).tracking(1.4).foregroundStyle(Theme.muted.opacity(0.6)).padding(.top, 20).padding(.bottom, 24)
+            Text("SPY FOR MAC  /  1.12.0").font(.system(size: 9, weight: .medium)).tracking(1.4).foregroundStyle(Theme.muted.opacity(0.6)).padding(.top, 20).padding(.bottom, 24)
         }.padding(.horizontal, 16).frame(width: 210).background(Theme.sidebar)
             .overlay(alignment: .trailing) { Rectangle().fill(Theme.border).frame(width: 1) }
     }
@@ -441,6 +444,10 @@ struct ContentView: View {
 
     private var settingsPanel: some View {
         VStack(alignment: .leading, spacing: 22) {
+            AppUpdatesView(updates: model.updates, installAllowed: !model.manualRecording && !model.busy && !model.saving && !model.diagnosticsBusy)
+            Divider().overlay(Theme.border)
+            CaptureRecoveryView(recovery: model.captureRecovery, onCancel: model.cancelCaptureRecovery)
+            Divider().overlay(Theme.border)
             CaptureTuningSettingsView(settings: model.captureTuning,
                 locked: model.recording || model.busy || model.saving || model.diagnosticsBusy,
                 previewLoader: { try await model.captureMaskPreview() })

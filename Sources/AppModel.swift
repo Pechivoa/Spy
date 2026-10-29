@@ -49,6 +49,8 @@ final class AppModel: ObservableObject {
     @Published var systemAudio: Bool { didSet { preferences.set(systemAudio, forKey: "audio") } }
     let applicationAudio: ApplicationAudioSelection
     let captureTuning: CaptureTuningSettings
+    lazy var captureRecovery = CaptureRecovery(defaults: preferences)
+    lazy var updates = AppUpdates(loadReceipt: !previewMode)
     @Published var applicationAudioIssue: String?
     @Published var microphone: Bool { didSet { preferences.set(microphone, forKey: "microphone") } }
     @Published var captureMode: CaptureMode { didSet { preferences.set(captureMode.rawValue, forKey: "captureMode") } }
@@ -118,6 +120,7 @@ final class AppModel: ObservableObject {
     @Published var captureIssue: String?
     @Published var startupStatus: String?
     var captureFailure: String?
+    var recordingWindowProcessID: pid_t?
     var pendingCaptureStop = false
     let captureAccess: CaptureAccess
     // Test seam runs the normal app startup state machine without OS prompts.
@@ -245,7 +248,7 @@ final class AppModel: ObservableObject {
         refreshDisplays()
         refreshMicrophones()
         if preview { return }
-        journal.record(.info, "Запуск", "Spy 1.11.2 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
+        journal.record(.info, "Запуск", "Spy 1.12.0 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
         if let issue = metadata.loadError { journal.record(.error, "Данные библиотеки", "Автоочистка приостановлена для защиты избранного.\n" + metadata.url.path + "\n" + issue) }
         hotkeys = HotKeys(bindings: shortcuts) { [weak self] id in
             Task { @MainActor in
@@ -373,10 +376,11 @@ final class AppModel: ObservableObject {
     }
     func toggleRecording() async {
         guard !busy, !saving, !shuttingDown, !diagnosticsBusy else { return }
-        if recording { await stop() } else { preferences.set(false, forKey: "gameOwnedReplay"); gameAutoCapture.userRequestedStart(); await start() }
+        if recording { await stop() } else { captureRecovery.cancel(); preferences.set(false, forKey: "gameOwnedReplay"); gameAutoCapture.userRequestedStart(); await start() }
     }
     func start(forManual: Bool = false, requestPermission: Bool = true) async {
         guard !recording, !busy, !saving, !shuttingDown, !diagnosticsBusy else { return }
+        if requestPermission { captureRecovery.cancel() }
         refreshDisplays()
         if captureMode == .display && selectedDisplay == nil {
             captureIssue = missingDisplayHelp
@@ -416,21 +420,25 @@ final class AppModel: ObservableObject {
         do {
             startupStatus = "Запускаю захват…"
             let config = RecordingConfig(displayID: displayID, quality: effectiveQuality, audio: systemAudio, microphone: microphone, seconds: max(30, effectiveMinutes * 60), windowID: captureMode == .window ? windowID : nil, microphoneID: microphoneID.isEmpty ? nil : microphoneID, excludedBundleIDs: privacy.excludedBundleIDs, microphoneCleanup: microphoneCleanup, applicationAudioMode: applicationAudio.mode, applicationAudioBundleIDs: applicationAudio.bundleIDs, encoding: captureTuning.encoding, masks: captureTuning.enabledMasks)
-            if let captureStartOverride { try await captureStartOverride(config) }
-            else { try await engine.start(config) }
+            var protectedConfig = config
+            if captureRecovery.isPending { protectedConfig.expectedWindowProcessID = recordingWindowProcessID }
+            if let captureStartOverride { try await captureStartOverride(protectedConfig) }
+            else { try await engine.start(protectedConfig) }
             if let captureFailure { throw SpyError.message(captureFailure) }
-            if pendingCaptureStop {
+            if pendingCaptureStop || shuttingDown || Task.isCancelled {
                 pendingCaptureStop = false
                 await engine.stop()
                 journal.record(.info, "Запуск буфера", "Запуск отменён запросом остановки.")
                 return
             }
             recordingQuality = effectiveQuality; recordingMinutes = effectiveMinutes
+            recordingWindowProcessID = engine.windowOwnerProcessID()
             recording = true; needsPermission = false; captureIssue = nil
             privacyPaused = false
             if !forManual { setReplayIntent(true) }
             activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .suddenTerminationDisabled], reason: "Instant replay recording")
             journal.record(.info, "Буфер", "Захват экрана запущен; первый кадр записан кодировщиком.")
+            captureRecovery.captureDidStart()
         } catch {
             await engine.stop()
             recording = false; stats = BufferStats(); audioMeter = AudioMeter()
@@ -441,7 +449,7 @@ final class AppModel: ObservableObject {
     }
     func stop(processPending: Bool = true, preserveReplayIntent: Bool = false, userInitiated: Bool = true) async {
         if userInitiated && !preserveReplayIntent { gameAutoCapture.userRequestedStop() }
-        if !preserveReplayIntent { manualPrivacyPause = false }
+        if !preserveReplayIntent { captureRecovery.cancel(); manualPrivacyPause = false }
         if !preserveReplayIntent { setReplayIntent(false) }
         guard !busy else { pendingCaptureStop = true; return }
         if manualRecording { await finishManual(stopCapture: true); return }
@@ -460,11 +468,11 @@ final class AppModel: ObservableObject {
     func setReplayIntent(_ enabled: Bool) {
         lastReplayEnabled = enabled
         preferences.set(enabled, forKey: "lastReplayEnabled")
-        if !enabled { preferences.set(false, forKey: "gameOwnedReplay") }
+        if !enabled { captureRecovery.cancel(); preferences.set(false, forKey: "gameOwnedReplay") }
     }
 
     func restoreLastSession() async {
-        guard !shuttingDown, startBufferOnLaunch || (rememberReplay && lastReplayEnabled) else { return }
+        guard !shuttingDown, !captureRecovery.isPending, startBufferOnLaunch || (rememberReplay && lastReplayEnabled) else { return }
         // Automatic replay follows selected processes across app launches;
         // restoring it as manual replay would leave it running after game exit.
         if preferences.bool(forKey: "gameOwnedReplay") && !startBufferOnLaunch {
@@ -483,13 +491,15 @@ final class AppModel: ObservableObject {
     @discardableResult func shutdown() async -> Bool {
         guard !shuttingDown else { return false }
         shuttingDown = true
+        captureRecovery.cancel()
+        if busy && startupStatus != nil { pendingCaptureStop = true }
         recordingDiagnostics.cancel()
         while diagnosticsBusy { try? await Task.sleep(nanoseconds: 50_000_000) }
         while busy || saving { try? await Task.sleep(nanoseconds: 50_000_000) }
         await flushAutoMoments()
         closeBufferPreview()
         var replay: SpySnapshot?
-        if saveBufferOnExit && lastReplayEnabled && recording && minutes > 0 && engine.testStats().frameCount > 0 {
+        if (saveBufferOnExit || updates.pendingInstall) && lastReplayEnabled && recording && minutes > 0 && engine.testStats().frameCount > 0 {
             do {
                 let snapshot = try await engine.snapshot(seconds: effectiveMinutes * 60)
                 let retained = cacheURL.appendingPathComponent("record-replay-" + UUID().uuidString, isDirectory: true)

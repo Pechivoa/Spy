@@ -124,7 +124,6 @@ import AVFoundation
             "The inline expand action has a visible text label rather than only a small overlay glyph")
         try SelfTest.require(host.playerView.frame.minY >= host.expandButton.frame.maxY + 1,
             "The expand action is laid out outside the native player rendering surface")
-        let pausedAt = player.currentTime().seconds
         try SelfTest.require(host.presentation.present(host, show: false), "The editor's fullscreen presentation is available")
         guard let panel = host.presentation.panel else { throw SpyError.message("TEST FAILED: fullscreen editor panel") }
         try SelfTest.require(panel.collectionBehavior.contains(.fullScreenNone) && !panel.styleMask.contains(.fullScreen) && host.playerView.superview === panel.contentView,
@@ -154,8 +153,26 @@ import AVFoundation
         try SelfTest.require(host.presentation.panel === panel && panel.frame == displayFrame,
             "Dock/menu-bar geometry notifications keep the editing player on the entire original display")
 
+        host.presentation.chromeIdleInterval = 0.1
+        editor.selectAll(); editor.seek(1, resume: true)
+        try await wait("Clean view fixture begins playing") { player.rate > 0 }
+        host.presentation.noteInteraction(at: NSPoint(x: displayFrame.width / 2, y: displayFrame.height / 2))
+        try await wait("Playback hides editing chrome after inactivity") { host.presentation.chromeHidden }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        try SelfTest.require(host.playerView.frame.size == panel.contentView?.bounds.size && host.playerView.player === player && host.playerView.controlsStyle == .none,
+            "Hidden chrome gives the same player the entire display without changing item or timeline")
+        host.presentation.noteInteraction(at: NSPoint(x: 500, y: 500))
+        try SelfTest.require(!host.presentation.chromeHidden && host.playerView.controlsStyle == .floating, "Pointer activity restores editing and native transport")
+        host.presentation.setControlsPinned(true)
+        try await Task.sleep(nanoseconds: 160_000_000)
+        try SelfTest.require(!host.presentation.chromeHidden, "Pinned editing controls never auto-hide")
+        host.presentation.setControlsPinned(false)
+        player.pause()
+        try await Task.sleep(nanoseconds: 160_000_000)
+        try SelfTest.require(!host.presentation.chromeHidden, "Paused video keeps editing controls visible")
+        let returnTime = player.currentTime().seconds
         panel.cancelOperation(nil)
-        try SelfTest.require(host.playerView.superview === host && player.currentItem === originalItem && player.rate == 0 && abs(player.currentTime().seconds - pausedAt) < 0.002,
+        try SelfTest.require(host.playerView.superview === host && player.currentItem === originalItem && player.rate == 0 && abs(player.currentTime().seconds - returnTime) < 0.002,
             "Fullscreen return preserves the selected player's paused frame and item")
         editor.detach()
         try SelfTest.require(!editor.isLooping && !editor.canSave && editor.duration == 0 && host.presentation.panel == nil,

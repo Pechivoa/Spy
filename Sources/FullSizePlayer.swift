@@ -27,6 +27,7 @@ struct FullSizePlayer: NSViewRepresentable {
     let presentation = FullSizePlayerPresentation()
     private(set) var videoTitle: String
     private(set) var editor: PlayerEditingState?
+    private var playerConstraints: [NSLayoutConstraint] = []
     static let entryBarHeight: CGFloat = 42
 
     init(player: AVPlayer?, title: String, editor: PlayerEditingState? = nil) {
@@ -78,16 +79,19 @@ struct FullSizePlayer: NSViewRepresentable {
     @objc private func expand() { presentation.present(self) }
 
     func movePlayer(to container: NSView, topInset: CGFloat = 0, bottomInset: CGFloat = 0) {
-        guard playerView.superview !== container else { return }
-        playerView.removeFromSuperview()
-        playerView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(playerView, positioned: .below, relativeTo: container.subviews.first)
-        NSLayoutConstraint.activate([
+        NSLayoutConstraint.deactivate(playerConstraints)
+        if playerView.superview !== container {
+            playerView.removeFromSuperview()
+            playerView.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(playerView, positioned: .below, relativeTo: container.subviews.first)
+        }
+        playerConstraints = [
             playerView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             playerView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             playerView.topAnchor.constraint(equalTo: container.topAnchor, constant: topInset),
             playerView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -(container === self ? Self.entryBarHeight : bottomInset))
-        ])
+        ]
+        NSLayoutConstraint.activate(playerConstraints)
     }
     func restoreInlinePlayer() { movePlayer(to: self) }
 }
@@ -100,6 +104,18 @@ struct FullSizePlayer: NSViewRepresentable {
     private var appliedPresentation: NSApplication.PresentationOptions?
     private var screenObserver: NSObjectProtocol?
     private var escapeMonitor: Any?
+    private var activityMonitor: Any?
+    private var idleTask: Task<Void, Never>?
+    private var rateObservation: NSKeyValueObservation?
+    private weak var controlsContainer: NSView?
+    private weak var exitButton: NSButton?
+    private weak var pinButton: NSButton?
+    private var safeTop: CGFloat = 0
+    private var editorHeight: CGFloat = 0
+    private var lastPointer: NSPoint?
+    private(set) var chromeHidden = false
+    private(set) var chromePinned = false
+    var chromeIdleInterval: Double = 2.5
 
     @discardableResult func present(_ host: FullSizePlayerHost, show: Bool = true) -> Bool {
         if let panel {
@@ -125,7 +141,7 @@ struct FullSizePlayer: NSViewRepresentable {
         panel.onExit = { [weak self] in self?.close() }
 
         let content = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
-        let safeTop = max(0, screen.safeAreaInsets.top)
+        safeTop = max(0, screen.safeAreaInsets.top)
         let exit = NSButton(title: "Выйти · Esc", target: self, action: #selector(exitFullSize))
         exit.bezelStyle = .rounded
         exit.toolTip = "Вернуться к просмотру в окне"
@@ -138,12 +154,21 @@ struct FullSizePlayer: NSViewRepresentable {
             exit.topAnchor.constraint(equalTo: content.topAnchor, constant: safeTop + 14),
             exit.heightAnchor.constraint(greaterThanOrEqualToConstant: 30)
         ])
-        let editorHeight: CGFloat
+        let pin = NSButton(checkboxWithTitle: "Панель всегда видна", target: self, action: #selector(toggleChromePin))
+        pin.identifier = NSUserInterfaceItemIdentifier("Spy.FullSizePlayer.PinControls")
+        pin.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(pin)
+        NSLayoutConstraint.activate([
+            pin.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+            pin.topAnchor.constraint(equalTo: content.topAnchor, constant: safeTop + 14)
+        ])
+        pinButton = pin; exitButton = exit
         if let editor = host.editor {
             editorHeight = 238
             let controls = FullSizeEditingControlsContainer(editor: editor)
             controls.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(controls)
+            controlsContainer = controls
             NSLayoutConstraint.activate([
                 controls.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
                 controls.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
@@ -155,6 +180,10 @@ struct FullSizePlayer: NSViewRepresentable {
         panel.contentView = content
         panel.appearance = NSAppearance(named: .darkAqua)
         self.panel = panel
+        panel.acceptsMouseMovedEvents = true
+        rateObservation = host.playerView.player?.observe(\.rate, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor in self?.noteInteraction() }
+        }
         let displayNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
         screenObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
@@ -175,17 +204,62 @@ struct FullSizePlayer: NSViewRepresentable {
                 if event.type == .keyUp { self?.close() }
                 return nil
             }
+            activityMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .leftMouseDragged, .rightMouseDown, .scrollWheel, .keyDown]) { [weak self] event in
+                if event.window === self?.panel { self?.noteInteraction(at: event.locationInWindow) }
+                return event
+            }
             panel.makeKeyAndOrderFront(nil)
             panel.makeFirstResponder(host.playerView)
+            lastPointer = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
         }
+        noteInteraction()
         return true
     }
 
     @objc private func exitFullSize() { close() }
+    @objc private func toggleChromePin() {
+        chromePinned = pinButton?.state == .on
+        noteInteraction()
+    }
+    func noteInteraction(at point: NSPoint? = nil) {
+        if let point { lastPointer = point }
+        setChromeHidden(false)
+        idleTask?.cancel()
+        guard panel != nil, !chromePinned else { return }
+        idleTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: UInt64((self?.chromeIdleInterval ?? 2.5) * 1_000_000_000)) } catch { return }
+            guard let self, self.panel != nil else { return }
+            let pointerOverControls = self.lastPointer.map { point in
+                (self.controlsContainer?.frame.contains(point) ?? false) ||
+                (self.exitButton?.frame.contains(point) ?? false) || (self.pinButton?.frame.contains(point) ?? false)
+            } ?? false
+            guard !self.chromePinned, self.host?.playerView.player?.rate ?? 0 > 0,
+                  self.host?.editor?.isSaving != true, self.host?.editor?.isStepping != true,
+                  self.host?.editor?.isSeeking != true, !pointerOverControls, NSEvent.pressedMouseButtons == 0 else { return }
+            self.setChromeHidden(true)
+        }
+    }
+    func setControlsPinned(_ pinned: Bool) {
+        chromePinned = pinned; pinButton?.state = pinned ? .on : .off; noteInteraction()
+    }
+    private func setChromeHidden(_ hidden: Bool) {
+        guard chromeHidden != hidden, let content = panel?.contentView else { return }
+        chromeHidden = hidden
+        controlsContainer?.isHidden = hidden; exitButton?.isHidden = hidden; pinButton?.isHidden = hidden
+        host?.playerView.controlsStyle = hidden ? .none : .floating
+        host?.movePlayer(to: content, topInset: hidden ? 0 : safeTop + 58, bottomInset: hidden ? 0 : editorHeight)
+        content.layoutSubtreeIfNeeded()
+    }
 
     func close(returnFocus: Bool = true) {
         guard let panel else { return }
         let restoreFocus = returnFocus && panel.isKeyWindow && NSApp.isActive
+        idleTask?.cancel(); idleTask = nil
+        rateObservation?.invalidate(); rateObservation = nil
+        if let activityMonitor { NSEvent.removeMonitor(activityMonitor); self.activityMonitor = nil }
+        host?.playerView.controlsStyle = .floating
+        chromeHidden = false; chromePinned = false; lastPointer = nil
+        controlsContainer = nil; exitButton = nil; pinButton = nil
         self.panel = nil
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver); self.screenObserver = nil }
         if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor); self.escapeMonitor = nil }

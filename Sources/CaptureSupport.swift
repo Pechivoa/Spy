@@ -48,6 +48,9 @@ import ScreenCaptureKit
         // A failure during start must be handled by start's catch. Dropping
         // stop() because busy is true used to leave a false "recording" state.
         guard startupStatus == nil else { return }
+        if captureRecovery.installed && lastReplayEnabled && !manualRecording && !shuttingDown {
+            captureRecovery.schedule(target: recoveryTarget, reason: value)
+        }
         if busy {
             pendingCaptureStop = true
             return

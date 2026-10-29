@@ -46,6 +46,7 @@ struct RecordingConfig {
     var applicationAudioBundleIDs: Set<String> = []
     var encoding: CaptureEncodingOptions = .init()
     var masks: [RecordingMask] = []
+    var expectedWindowProcessID: pid_t? = nil
 }
 
 struct BufferStats {
@@ -187,11 +188,14 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         try Task.checkCancellation()
         let filter: SCContentFilter
+        var windowProcessID: pid_t?
         let pixelsW: Int, pixelsH: Int
         if let windowID = config.windowID {
             guard let window = content.windows.first(where: { $0.windowID == windowID }), window.owningApplication?.bundleIdentifier != Bundle.main.bundleIdentifier else {
                 throw SpyError.message("Выбранное окно закрыто или недоступно. Обновите список окон.")
             }
+            try WindowRecoveryIdentity.validate(expected: config.expectedWindowProcessID, actual: window.owningApplication?.processID)
+            windowProcessID = window.owningApplication?.processID
             try CapturePrivacyPolicy.validateWindowOwner(window.owningApplication?.bundleIdentifier, selected: config.excludedBundleIDs, ownBundleID: Bundle.main.bundleIdentifier ?? "local.spy.mac")
             filter = SCContentFilter(desktopIndependentWindow: window)
             pixelsW = Int(window.frame.width * CGFloat(filter.pointPixelScale))
@@ -226,6 +230,7 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
         try queue.sync {
             try prepare(width: w, height: h, fps: config.quality.fps, bitrate: config.quality.bitrate, audio: config.audio, microphone: config.microphone, microphoneCleanup: config.microphoneCleanup, seconds: config.seconds, encoding: config.encoding, masks: config.masks)
             activeConfig = config
+            activeConfig?.expectedWindowProcessID = windowProcessID
             usesApplicationAudio = config.audio && config.applicationAudioMode == .selected
         }
         do {
@@ -446,6 +451,7 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
         let filter: SCContentFilter
         if let windowID = config.windowID {
             guard let window = content.windows.first(where: { $0.windowID == windowID }) else { throw SpyError.message("Выбранное окно больше недоступно.") }
+            try WindowRecoveryIdentity.validate(expected: config.expectedWindowProcessID, actual: window.owningApplication?.processID)
             try CapturePrivacyPolicy.validateWindowOwner(window.owningApplication?.bundleIdentifier, selected: context.4, ownBundleID: Bundle.main.bundleIdentifier ?? "local.spy.mac")
             filter = SCContentFilter(desktopIndependentWindow: window)
         } else {
@@ -1035,6 +1041,8 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
         resolveFirstFrame(.failure(startupError!))
         onFailure?(message)
     }
+
+    func windowOwnerProcessID() -> pid_t? { queue.sync { activeConfig?.expectedWindowProcessID } }
 
     func waitForFirstFrame(timeout: Double = 12) async throws {
         let cancelled = CaptureCancellationFlag()
