@@ -17,7 +17,7 @@ enum CaptureVideoCodec: String, Codable, CaseIterable, Identifiable, Sendable {
     var mediaCodec: CMVideoCodecType { self == .h264 ? kCMVideoCodecType_H264 : kCMVideoCodecType_HEVC }
 }
 
-struct CaptureEncodingOptions: Equatable, Sendable {
+struct CaptureEncodingOptions: Codable, Equatable, Sendable {
     var codec: CaptureVideoCodec = .h264
     /// Zero retains the existing quality preset's average bitrate.
     var bitrateMbps: Double = 0

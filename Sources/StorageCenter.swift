@@ -73,7 +73,7 @@ enum SpyCacheInventory {
 
 @MainActor extension AppModel {
     var updateStorageURL: URL { journal.fileURL.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Updates") }
-    var storageLocked: Bool { recording || busy || saving || manualRecording || bufferPreview != nil || diagnosticsBusy || updates.working || updates.pendingInstall || shuttingDown }
+    var storageLocked: Bool { !exportQueue.protectedDirectories.isEmpty || recording || busy || saving || manualRecording || bufferPreview != nil || diagnosticsBusy || updates.working || updates.pendingInstall || shuttingDown }
     func trashCacheEntry(_ entry: SpyCacheEntry) async {
         guard !storageLocked else { showError("Закройте просмотр, остановите запись и дождитесь сохранения перед очисткой.", topic: "Очистка кэша"); return }
         busy = true
@@ -105,7 +105,7 @@ struct StorageCenterView: View {
             }
             Text("Размер файлов: " + detailedFileSize(entries.reduce(0) { $0 + $1.bytes })).font(.headline)
             Text("Просмотры могут разделять данные с буфером. Размер файлов не равен освобождаемому месту. Удалённое останется в Корзине macOS.").font(.caption).foregroundStyle(Theme.muted)
-            if model.storageLocked { Label("Очистка доступна после остановки записи и закрытия просмотра", systemImage: "lock.fill").font(.caption).foregroundStyle(.orange) }
+            if model.storageLocked { Label("Завершите запись, просмотр и задачи очереди перед очисткой", systemImage: "lock.fill").font(.caption).foregroundStyle(.orange) }
             ForEach(SpyCacheKind.allCases, id: \.self) { kind in
                 let rows = entries.filter { $0.kind == kind }
                 DisclosureGroup {

@@ -33,7 +33,7 @@ enum Quality: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-struct RecordingConfig {
+struct RecordingConfig: Codable {
     var displayID: CGDirectDisplayID
     var quality: Quality
     var audio: Bool
@@ -50,7 +50,7 @@ struct RecordingConfig {
     var expectedWindowProcessID: pid_t? = nil
 }
 
-struct BufferStats {
+struct BufferStats: Codable {
     var seconds: Double = 0
     var bytes: Int64 = 0
     var frameCount: Int = 0
@@ -74,7 +74,7 @@ struct Segment {
     var seconds: Double { max(0, CMTimeGetSeconds(end - start)) }
 }
 
-struct SpySnapshot {
+struct SpySnapshot: Codable {
     let directory: URL
     let urls: [URL]
     let requestedSeconds: Double
@@ -84,7 +84,7 @@ struct SpySnapshot {
     var captureSessionID: UUID? = nil
 }
 
-struct CaptureProgress {
+struct CaptureProgress: Codable {
     let sessionID: UUID
     let capturedSeconds: Double
     let sourceSeconds: Double?

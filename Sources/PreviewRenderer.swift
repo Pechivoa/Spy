@@ -23,6 +23,16 @@ import AppKit
             }
             await model.reloadClips()
         }
+        if section == 26, let clip = model.clips.first {
+            model.manualSaving = true
+            _ = try model.enqueueClip(clip, start: 0, end: min(1.5, clip.duration), microphone: false,
+                gains: AudioLevels(system: 0.6, microphone: 0.2))
+            let deadline = Date().addingTimeInterval(5)
+            while model.exportQueue.items.contains(where: { $0.phase == .preparing }), Date() < deadline {
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            await model.exportQueue.pauseAll(); model.manualSaving = false
+        }
         if section == 6 || section == 10 {
             model.profiles = [AppProfile(bundleID: "example.game", name: "Пример: Игра", settings: CaptureSettings(quality: .smooth, minutes: 10, systemAudio: true, microphone: true, microphoneID: "", systemVolume: 0.7, microphoneVolume: 0.5, separateAudio: true))]
         }
@@ -58,7 +68,7 @@ import AppKit
             model.audioMeter = AudioMeter(system: 0.12, microphone: 0.05)
         }
         if section == 3 {
-            model.journal.record(.info, "Пример: запуск", "Spy 1.15.0 запущен. Журнал сохраняется между запусками.")
+            model.journal.record(.info, "Пример: запуск", "Spy 1.16.0 запущен. Журнал сохраняется между запусками.")
             model.journal.record(.info, "Пример: настройка клавиш", "Сохранить повтор → ⌃⇧S")
             model.journal.record(.warning, "Пример: доступ к экрану", "Разрешение ещё не получено. Разрешите Spy запись экрана в настройках macOS.")
             model.journal.record(.error, "Пример: захват экрана", "Не удалось запустить захват.\nДомен: com.apple.ScreenCaptureKit.SCStreamErrorDomain · Код: −3801")
@@ -74,10 +84,11 @@ import AppKit
         }
         if section == 16 || section == 17 { model.recoveryFolders = [model.cacheURL.appendingPathComponent("record-replay-crash-example")] }
         defer { try? FileManager.default.removeItem(at: model.libraryURL.deletingLastPathComponent()) }
-        let width: CGFloat = section == 24 ? 1060 : section == 25 ? 900 : section == 22 ? 720 : section == 15 ? 1040 : section == 14 ? 56 : section == 12 || section == 16 ? 340 : section == 13 || section == 17 ? 280 : section == 23 ? 720 : section == 4 ? 1040 : section == 5 ? 350 : section == 8 ? 112 : section == 10 ? 540 : 1160
-        let height: CGFloat = section == 24 ? 800 : section == 25 ? 640 : section == 22 ? 540 : section == 15 ? 800 : section == 14 ? 18 : section == 12 || section == 16 ? 380 : section == 13 || section == 17 ? 150 : section == 23 ? 540 : section == 4 ? 800 : section == 5 ? 82 : section == 8 ? 24 : section == 10 ? 530 : section == 0 || section == 9 ? 1250 : section == 2 ? 1580 : section == 7 ? 1100 : 820
+        let width: CGFloat = section == 26 ? 520 : section == 24 ? 1060 : section == 25 ? 900 : section == 22 ? 720 : section == 15 ? 1040 : section == 14 ? 56 : section == 12 || section == 16 ? 340 : section == 13 || section == 17 ? 280 : section == 23 ? 720 : section == 4 ? 1040 : section == 5 ? 350 : section == 8 ? 112 : section == 10 ? 540 : 1160
+        let height: CGFloat = section == 26 ? 560 : section == 24 ? 800 : section == 25 ? 640 : section == 22 ? 540 : section == 15 ? 800 : section == 14 ? 18 : section == 12 || section == 16 ? 380 : section == 13 || section == 17 ? 150 : section == 23 ? 540 : section == 4 ? 800 : section == 5 ? 82 : section == 8 ? 24 : section == 10 ? 530 : section == 0 || section == 9 ? 1250 : section == 2 ? 1580 : section == 7 ? 1100 : 820
         let root: AnyView
-        if (section == 15 || section == 22), let clip = model.clips.first {
+        if section == 26 { root = AnyView(ExportQueuePanel(queue: model.exportQueue)) }
+        else if (section == 15 || section == 22), let clip = model.clips.first {
             let preview = BufferPreview(directory: clip.url.deletingLastPathComponent(), clip: clip, capturedAt: Date())
             model.bufferPreview = preview
             root = AnyView(BufferPreviewSheet(preview: preview, model: model))

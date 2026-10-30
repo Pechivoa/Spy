@@ -150,6 +150,7 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     header.id("capture-top")
+                    RestoredExportNotice(queue: model.exportQueue, open: model.showExportQueue)
                     CaptureHealthView(health: model.captureHealth, showJournal: { model.section = 3 })
                     CaptureRecoveryNotice(recovery: model.captureRecovery, onCancel: model.cancelCaptureRecovery)
                     if !model.recoveryFolders.isEmpty && model.section != 6 { RecoveryNotice(model: model) }
@@ -219,7 +220,7 @@ struct ContentView: View {
             Button { model.showExportQueue() } label: {
                 HStack(spacing: 6) {
                     Text("Очередь")
-                    if model.queuedExports > 0 { Text("\(model.queuedExports)").foregroundStyle(Theme.accent).monospacedDigit() }
+                    if model.exportQueue.pendingCount > 0 { Text("\(model.exportQueue.pendingCount)").foregroundStyle(Theme.accent).monospacedDigit() }
                 }
             }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.muted)
                 .accessibilityIdentifier("Spy.Navigation.Queue")

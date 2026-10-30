@@ -214,7 +214,7 @@ final class AppModel: ObservableObject {
     private var observers: [NSObjectProtocol] = []
     let previewMode: Bool
 
-    init(preview: Bool = false, defaults suppliedDefaults: UserDefaults? = nil, captureAccess: CaptureAccess? = nil) {
+    init(preview: Bool = false, defaults suppliedDefaults: UserDefaults? = nil, captureAccess: CaptureAccess? = nil, previewRoot suppliedPreviewRoot: URL? = nil) {
         self.captureAccess = captureAccess ?? .live
         let defaults = suppliedDefaults ?? (preview ? UserDefaults(suiteName: "Spy.Preview." + UUID().uuidString)! : UserDefaults.standard)
         preferences = defaults
@@ -237,7 +237,7 @@ final class AppModel: ObservableObject {
         libraryLimitGB = defaults.object(forKey: "libraryLimitGB") == nil ? 10 : min(500, max(1, defaults.double(forKey: "libraryLimitGB")))
         maximumAgeDays = min(365, max(0, defaults.integer(forKey: "maximumAgeDays")))
         notificationsEnabled = defaults.object(forKey: "notifications") == nil ? true : defaults.bool(forKey: "notifications")
-        let previewRoot = FileManager.default.temporaryDirectory.appendingPathComponent("SpyPreview-" + UUID().uuidString, isDirectory: true)
+        let previewRoot = preview ? (suppliedPreviewRoot ?? FileManager.default.temporaryDirectory.appendingPathComponent("SpyPreview-" + UUID().uuidString, isDirectory: true)) : FileManager.default.temporaryDirectory
         let defaultLibrary = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0].appendingPathComponent("Spy", isDirectory: true)
         libraryURL = preview ? previewRoot.appendingPathComponent("Library") : defaults.string(forKey: "libraryPath").map { URL(fileURLWithPath: $0, isDirectory: true) } ?? defaultLibrary
         separateAudio = defaults.bool(forKey: "separateAudio")
@@ -290,7 +290,11 @@ final class AppModel: ObservableObject {
         refreshDisplays()
         refreshMicrophones()
         if preview { return }
-        journal.record(.info, "Запуск", "Spy 1.15.0 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
+        do {
+            try configureExportQueue()
+            if exportQueue.restoredCount > 0 { message = "Восстановлена очередь: \(exportQueue.restoredCount). Откройте очередь, чтобы продолжить сохранение." }
+        } catch { journal.record(.error, "Восстановление очереди", describeError(error)) }
+        journal.record(.info, "Запуск", "Spy 1.16.0 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
         if let issue = metadata.loadError { journal.record(.error, "Данные библиотеки", "Автоочистка приостановлена для защиты избранного.\n" + metadata.url.path + "\n" + issue) }
         hotkeys = HotKeys(bindings: shortcuts) { [weak self] id in
             Task { @MainActor in

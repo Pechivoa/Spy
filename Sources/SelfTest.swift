@@ -167,6 +167,34 @@ enum SelfTest {
 
 @main struct SpyBootstrap {
     @MainActor static func main() async {
+        if let index = CommandLine.arguments.firstIndex(of: "--soak-test"), CommandLine.arguments.count > index + 1 {
+            do {
+                let seconds = CommandLine.arguments.count > index + 2 ? Double(CommandLine.arguments[index + 2]) ?? 60 : 60
+                try await ReliabilitySoakTests.run(directory: URL(fileURLWithPath: CommandLine.arguments[index + 1]), seconds: seconds); exit(0)
+            } catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--capture-service"), CommandLine.arguments.count > index + 1 {
+            do { try await CaptureServicePrototype(root: URL(fileURLWithPath: CommandLine.arguments[index + 1])).run(); exit(0) }
+            catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--capture-service-driver"), CommandLine.arguments.count > index + 1 {
+            do { try await CaptureServiceProbe.driver(root: URL(fileURLWithPath: CommandLine.arguments[index + 1])); exit(0) }
+            catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--capture-service-probe"), CommandLine.arguments.count > index + 1 {
+            do { try await CaptureServiceProbe.run(root: URL(fileURLWithPath: CommandLine.arguments[index + 1])); exit(0) }
+            catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--queue-fixture"), CommandLine.arguments.count > index + 3 {
+            do {
+                try await DurableQueueTests.fixture(root: URL(fileURLWithPath: CommandLine.arguments[index + 1]),
+                    source: URL(fileURLWithPath: CommandLine.arguments[index + 2]), stage: CommandLine.arguments[index + 3]); exit(0)
+            } catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--durable-queue-test"), CommandLine.arguments.count > index + 1 {
+            do { try await DurableQueueTests.run(directory: URL(fileURLWithPath: CommandLine.arguments[index + 1])); exit(0) }
+            catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
         if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--spy-install-update" {
             exit(SpyUpdateInstaller.helper(planURL: URL(fileURLWithPath: CommandLine.arguments[2])))
         }
