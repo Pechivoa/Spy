@@ -220,8 +220,6 @@ struct BufferPreviewSheet: View {
     @State private var saveError: String?
     @State private var start: Double = 0
     @State private var end: Double
-    private var currentTime: Double { editor.currentTime }
-    private var frameStep: Double { max(1.0 / 60_000, editor.frameDuration) }
     private var momentMarkers: [ClipMarker] { model.bufferPreview?.id == preview.id ? model.bufferPreview!.momentMarkers : preview.momentMarkers }
     init(preview: BufferPreview, model: AppModel) {
         self.preview = preview
@@ -238,85 +236,13 @@ struct BufferPreviewSheet: View {
         return url
     }
     var body: some View {
-        ScrollView {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                SpyMark().fill(Theme.accent).frame(width: 18, height: 28)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(preview.recoveryOrigin == nil ? "Просмотр буфера" : "Просмотр восстановления").font(.system(size: 17, weight: .semibold))
-                    Text("\(preciseClock(preview.clip.duration)) · \(fileSize(preview.clip.bytes)) в буфере")
-                        .font(.system(size: 11)).foregroundStyle(Theme.muted)
-                    Text("Снимок на \(preview.snapshotTimeLabel). Новые действия не входят.")
-                        .font(.system(size: 10)).foregroundStyle(Theme.muted)
-                }
-                Spacer()
-                Button {
-                    player?.pause(); saveError = nil
-                    let selectedMicrophone = microphoneEnabled
-                    Task {
-                        do { try await model.refreshBufferPreview(preview, microphoneEnabled: selectedMicrophone) }
-                        catch { saveError = error.localizedDescription }
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        if model.preparingBufferPreview { ProgressView().controlSize(.small) }
-                        else { Image(systemName: "arrow.clockwise") }
-                        Text(model.preparingBufferPreview ? "Обновляю…" : "Обновить буфер")
-                    }
-                }.buttonStyle(.bordered).controlSize(.small).disabled(!model.canRefreshBufferPreview || preview.recoveryOrigin != nil)
-                    .help("Получить новые кадры. Границы выбранного фрагмента будут сброшены.")
-                Text(savedURL == nil ? "НЕ СОХРАНЕНО" : entireBuffer ? "В БИБЛИОТЕКЕ" : "ФРАГМЕНТ СОХРАНЁН")
-                    .font(.system(size: 9, weight: .semibold)).tracking(0.8)
-                    .foregroundStyle(savedURL == nil ? Theme.muted : Theme.green)
-            }.padding(20)
-            HStack {
-                Label("Предпросмотр видео", systemImage: "play.rectangle").font(.system(size: 12)).foregroundStyle(Theme.muted)
-                Spacer()
-                Button { editor.openFullScreen() } label: { Label("На весь экран", systemImage: "arrow.up.left.and.arrow.down.right") }
-                    .buttonStyle(.borderedProminent).disabled(!editor.canOpenFullScreen)
-                    .accessibilityIdentifier("Spy.BufferPreview.FullScreen")
-            }.padding(.horizontal, 20).padding(.bottom, 10)
-            FullSizePlayer(player: player, title: "Просмотр буфера", editor: editor).frame(height: 290)
-            FramePlaybackToolbar(editor: editor).padding(.horizontal, 20).padding(.top, 8)
-            if let audioControls {
-                WaveformMixerView(controls: audioControls, editor: editor).padding(.horizontal, 20).disabled(model.saving)
-                VideoMicrophoneView(controls: audioControls, onChange: { microphoneEnabled = $0 })
-                    .padding(.horizontal, 20).padding(.top, 10).disabled(model.saving)
-            }
-            TimelineThumbnailStrip(asset: preview.asset, assetID: preview.id.uuidString, duration: duration, selectionStart: start, selectionEnd: end, onSeek: seek)
-                .padding(.horizontal, 20).padding(.top, 12)
-            MomentMarkerStrip(markers: momentMarkers, onSeek: seek).padding(.horizontal, 20)
-            selectionControls.padding(.horizontal, 20).padding(.vertical, 12)
-            VStack(alignment: .leading, spacing: 12) {
-                if let playbackError { Text(playbackError).foregroundStyle(Theme.danger).font(.system(size: 12)) }
-                if let saveError { Text(saveError).foregroundStyle(Theme.danger).font(.system(size: 12)).textSelection(.enabled) }
-                Text(savedURL != nil ? "Выбранное видео добавлено в библиотеку." : "Сохранится выбранный момент. При закрытии временный просмотр удалится.")
-                    .font(.system(size: 12)).foregroundStyle(savedURL == nil ? Theme.muted : Theme.green)
-                HStack {
-                    Label(model.privacyPaused ? "Запись на паузе" : model.recording ? "Новые кадры пишутся в фоне, вне снимка" : "Запись остановлена", systemImage: model.privacyPaused ? "pause.circle" : model.recording ? "record.circle" : "stop.circle")
-                        .font(.system(size: 11)).foregroundStyle(model.privacyPaused ? Theme.accent : model.recording ? Theme.green : Theme.muted)
-                    Spacer()
-                    Button("Закрыть") { player?.pause(); model.closeBufferPreview() }
-                        .keyboardShortcut(.cancelAction).disabled(model.saving)
-                    Button {
-                        saveError = nil
-                        let selectedStart = start, selectedEnd = end
-                        Task {
-                            do { try await model.saveBufferPreview(preview, start: selectedStart, end: selectedEnd, microphoneEnabled: microphoneEnabled) }
-                            catch { saveError = error.localizedDescription }
-                        }
-                    } label: {
-                        HStack(spacing: 7) {
-                            if model.saving { ProgressView().controlSize(.small) }
-                            Image(systemName: savedURL == nil ? "square.and.arrow.down" : "checkmark")
-                            Text(savedURL != nil ? "Сохранено" : model.preparingBufferPreview ? "Обновляю…" : model.saving ? "Сохраняется…" : entireBuffer ? "Сохранить видео" : "Сохранить фрагмент")
-                        }
-                    }.buttonStyle(.borderedProminent).disabled(model.saving || !editor.canSave || savedURL != nil || range == nil)
-                }.buttonStyle(.bordered)
-            }.padding(20)
-        }
-        }.frame(width: 760).frame(maxHeight: min(1100, (NSScreen.main?.visibleFrame.height ?? 1000) - 80)).foregroundStyle(.white).background(Theme.background)
-        .preferredColorScheme(.dark).tint(Theme.accent).interactiveDismissDisabled(model.saving)
+        PreviewWorkspace(player: player, title: "Просмотр буфера", fullScreenID: "Spy.BufferPreview.FullScreen",
+                         editor: editor, audioControls: audioControls, busy: model.saving,
+                         header: { previewHeader }, filmstrip: {
+            TimelineThumbnailStrip(asset: preview.asset, assetID: preview.id.uuidString, duration: duration,
+                                   selectionStart: start, selectionEnd: end, onSeek: seek)
+            MomentMarkerStrip(markers: momentMarkers, onSeek: seek)
+        }, footer: { previewFooter })
         .task(id: preview.id) {
             releasePlayer()
             start = 0; end = preview.clip.duration
@@ -380,36 +306,61 @@ struct BufferPreviewSheet: View {
         player = nil; audioControls = nil
     }
 
-    private var selectionControls: some View {
-        VStack(spacing: 10) {
-            HStack {
-                Label("Выбрать момент", systemImage: "scissors").font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Text(frameClock(max(0, end - start))).monospacedDigit().foregroundStyle(Theme.accent)
-                Button("Весь буфер") { editor.selectAll(); seek(0) }.controlSize(.small)
+    private var previewHeader: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(preview.recoveryOrigin == nil ? "Предпросмотр буфера" : "Просмотр восстановления")
+                    .font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                Text("\(preciseClock(preview.clip.duration)) · \(fileSize(preview.clip.bytes)) · снимок на \(preview.snapshotTimeLabel)")
+                    .font(.system(size: 10)).foregroundStyle(Theme.muted).lineLimit(1)
             }
-            HStack(spacing: 10) {
-                Text("Начало").frame(width: 48, alignment: .leading)
-                Slider(value: Binding(get: { start }, set: { editor.setStart($0) }), in: 0...duration, step: frameStep)
-                    .accessibilityLabel("Начало фрагмента буфера")
-                Text(frameClock(start)).monospacedDigit().frame(width: 85)
-                Button("Из плеера") { editor.setStartAtPlayhead() }.controlSize(.small)
+            Spacer(minLength: 8)
+            if preview.recoveryOrigin == nil {
+                Button {
+                    player?.pause(); saveError = nil
+                    let selectedMicrophone = microphoneEnabled
+                    Task {
+                        do { try await model.refreshBufferPreview(preview, microphoneEnabled: selectedMicrophone) }
+                        catch { saveError = error.localizedDescription }
+                    }
+                } label: { Label(model.preparingBufferPreview ? "Обновляю…" : "Обновить", systemImage: "arrow.clockwise") }
+                    .buttonStyle(.bordered).controlSize(.small).disabled(!model.canRefreshBufferPreview)
+                    .help("Получить новые кадры. Границы фрагмента будут сброшены.")
             }
-            HStack(spacing: 10) {
-                Text("Конец").frame(width: 48, alignment: .leading)
-                Slider(value: Binding(get: { end }, set: { editor.setEnd($0) }), in: 0...duration, step: frameStep)
-                    .accessibilityLabel("Конец фрагмента буфера")
-                Text(frameClock(end)).monospacedDigit().frame(width: 85)
-                Button("Из плеера") { editor.setEndAtPlayhead() }.controlSize(.small)
-            }
-            HStack {
-                Text("В плеере: " + frameClock(currentTime)).foregroundStyle(Theme.muted).monospacedDigit()
-                Spacer()
-                Button("Просмотреть фрагмент") {
-                    editor.seek(start, resume: true)
-                }.controlSize(.small)
-            }
-        }.font(.system(size: 11)).buttonStyle(.bordered).disabled(model.saving || player == nil)
+        }
+    }
+    private var previewFooter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let playbackError { Text(playbackError).foregroundStyle(Theme.danger).font(.system(size: 11)).textSelection(.enabled) }
+            if let saveError { Text(saveError).foregroundStyle(Theme.danger).font(.system(size: 11)).textSelection(.enabled) }
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(savedURL != nil ? "Сохранено в библиотеку" : "Ещё не сохранено")
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(savedURL == nil ? Color.white : Theme.green)
+                    Text(preview.recoveryOrigin != nil ? "Исходные сегменты восстановления сохраняются." :
+                         model.recording ? "Повтор продолжает запись. Здесь — зафиксированный снимок." : "Запись остановлена. Сохраните нужный фрагмент.")
+                        .font(.system(size: 10)).foregroundStyle(Theme.muted).lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                Button("Закрыть") { player?.pause(); model.closeBufferPreview() }
+                    .keyboardShortcut(.cancelAction).disabled(model.saving)
+                Button {
+                    saveError = nil
+                    let selectedStart = start, selectedEnd = end
+                    Task {
+                        do { try await model.saveBufferPreview(preview, start: selectedStart, end: selectedEnd, microphoneEnabled: microphoneEnabled) }
+                        catch { saveError = error.localizedDescription }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        if model.saving { ProgressView().controlSize(.small) }
+                        Image(systemName: savedURL == nil ? "square.and.arrow.down" : "checkmark")
+                        Text(savedURL != nil ? "Сохранено" : model.preparingBufferPreview ? "Обновляю…" : model.saving ? "Сохраняется…" : entireBuffer ? "Сохранить видео" : "Сохранить фрагмент")
+                    }
+                }.buttonStyle(.borderedProminent).disabled(model.saving || !editor.canSave || savedURL != nil || range == nil)
+                    .accessibilityIdentifier("Spy.BufferPreview.Save")
+            }.buttonStyle(.bordered)
+        }
     }
     private func seek(_ seconds: Double) {
         editor.seek(seconds)

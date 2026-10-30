@@ -200,7 +200,6 @@ struct ContentView: View {
             }
             Button("Отмена", role: .cancel) { deleteCandidate = nil }
         } message: { Text("Видео можно восстановить из Корзины macOS.") }
-        .sheet(item: $model.selectedClip) { clip in PlayerSheet(clip: clip, model: model) }
         .sheet(item: $renameCandidate) { clip in RenameClipSheet(clip: clip, model: model) }
         .sheet(item: $model.editingShortcut) { action in ShortcutCaptureSheet(action: action, model: model) }
     }
@@ -238,7 +237,7 @@ struct ContentView: View {
                     Text("\(fileSize(model.freeSpace)) свободно").font(.system(size: 11)).foregroundStyle(Theme.muted)
                 }
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(Theme.panel, in: RoundedRectangle(cornerRadius: 14))
-            Text("SPY FOR MAC  /  1.13.0").font(.system(size: 9, weight: .medium)).tracking(1.4).foregroundStyle(Theme.muted.opacity(0.6)).padding(.top, 20).padding(.bottom, 24)
+            Text("SPY FOR MAC  /  1.13.1").font(.system(size: 9, weight: .medium)).tracking(1.4).foregroundStyle(Theme.muted.opacity(0.6)).padding(.top, 20).padding(.bottom, 24)
         }.padding(.horizontal, 16).frame(width: 210).background(Theme.sidebar)
             .overlay(alignment: .trailing) { Rectangle().fill(Theme.border).frame(width: 1) }
     }

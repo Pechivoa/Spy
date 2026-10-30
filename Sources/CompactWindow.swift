@@ -113,11 +113,6 @@ struct SpyWindowView: View {
         }
         .onChange(of: model.recording) { _, value in window.recording = value }
         .onChange(of: model.section) { _, value in if [6, 7, 8].contains(value) { window.showExpanded() } }
-        .sheet(item: Binding(get: { model.bufferPreview }, set: { value in
-            if value == nil { model.closeBufferPreview() }
-        })) { preview in
-            BufferPreviewSheet(preview: preview, model: model)
-        }
     }
     private func toolbar(compact: Bool, tiny: Bool) -> some View {
         HStack(spacing: 6) {

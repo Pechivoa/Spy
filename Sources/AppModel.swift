@@ -127,10 +127,16 @@ final class AppModel: ObservableObject {
     var privacyTransitionRunning = false
     var pendingPrivacyUpdate = false
     @Published var microphoneCleanup = false { didSet { preferences.set(microphoneCleanup, forKey: "microphoneCleanup") } }
-    @Published var bufferPreview: BufferPreview?
+    let bufferViewer = VideoViewerWindow()
+    let savedViewer = VideoViewerWindow()
+    @Published var bufferPreview: BufferPreview? { didSet {
+        if oldValue?.id != bufferPreview?.id { presentBufferViewer() }
+    } }
     @Published var stats = BufferStats() { didSet { updateHUD() } }
     @Published var clips: [Clip] = []
-    @Published var selectedClip: Clip?
+    @Published var selectedClip: Clip? { didSet {
+        if oldValue?.id != selectedClip?.id { presentSavedViewer() }
+    } }
     @Published var message: String?
     @Published var error: String?
     @Published var needsPermission = false
@@ -267,7 +273,7 @@ final class AppModel: ObservableObject {
         refreshDisplays()
         refreshMicrophones()
         if preview { return }
-        journal.record(.info, "Запуск", "Spy 1.13.0 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
+        journal.record(.info, "Запуск", "Spy 1.13.1 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
         if let issue = metadata.loadError { journal.record(.error, "Данные библиотеки", "Автоочистка приостановлена для защиты избранного.\n" + metadata.url.path + "\n" + issue) }
         hotkeys = HotKeys(bindings: shortcuts) { [weak self] id in
             Task { @MainActor in
@@ -518,6 +524,7 @@ final class AppModel: ObservableObject {
         while busy || saving { try? await Task.sleep(nanoseconds: 50_000_000) }
         await flushAutoMoments()
         closeBufferPreview()
+        selectedClip = nil
         var replay: SpySnapshot?
         if (saveBufferOnExit || updates.pendingInstall) && lastReplayEnabled && recording && minutes > 0 && engine.testStats().frameCount > 0 {
             do {

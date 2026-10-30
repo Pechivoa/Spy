@@ -57,9 +57,9 @@ enum MarkerTimeline {
 
 @MainActor extension AppModel {
     func openBufferPreview() async {
+        if bufferPreview != nil { if !previewMode { bufferViewer.bringForward() }; return }
         showMainWindow?()
         if !previewMode { NSApp.activate(ignoringOtherApps: true) }
-        if bufferPreview != nil { return }
         guard canPreviewBuffer else {
             message = recording ? "Дождитесь готовности буфера." : "Сначала включите мгновенный повтор."
             return

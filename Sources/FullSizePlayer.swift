@@ -7,12 +7,14 @@ struct FullSizePlayer: NSViewRepresentable {
     let player: AVPlayer?
     let title: String
     var editor: PlayerEditingState? = nil
+    var showsEntryButton = true
+    var usesNativeControls = true
 
     func makeNSView(context: Context) -> FullSizePlayerHost {
-        FullSizePlayerHost(player: player, title: title, editor: editor)
+        FullSizePlayerHost(player: player, title: title, editor: editor, showsEntryButton: showsEntryButton, usesNativeControls: usesNativeControls)
     }
     func updateNSView(_ view: FullSizePlayerHost, context: Context) {
-        view.update(player: player, title: title, editor: editor)
+        view.update(player: player, title: title, editor: editor, showsEntryButton: showsEntryButton, usesNativeControls: usesNativeControls)
     }
     static func dismantleNSView(_ view: FullSizePlayerHost, coordinator: ()) {
         view.presentation.close(returnFocus: false)
@@ -28,11 +30,14 @@ struct FullSizePlayer: NSViewRepresentable {
     private(set) var videoTitle: String
     private(set) var editor: PlayerEditingState?
     private var playerConstraints: [NSLayoutConstraint] = []
+    private var showsEntryButton: Bool
+    private var usesNativeControls: Bool
     static let entryBarHeight: CGFloat = 42
 
-    init(player: AVPlayer?, title: String, editor: PlayerEditingState? = nil) {
+    init(player: AVPlayer?, title: String, editor: PlayerEditingState? = nil, showsEntryButton: Bool = true, usesNativeControls: Bool = true) {
         videoTitle = title
         self.editor = editor
+        self.showsEntryButton = showsEntryButton; self.usesNativeControls = usesNativeControls
         super.init(frame: .zero)
         wantsLayer = true; layer?.backgroundColor = NSColor.black.cgColor
         playerView.controlsStyle = .floating
@@ -54,6 +59,7 @@ struct FullSizePlayer: NSViewRepresentable {
         expandButton.target = self; expandButton.action = #selector(expand)
         expandButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(expandButton)
+        expandButton.isHidden = !showsEntryButton
         NSLayoutConstraint.activate([
             expandButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             expandButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
@@ -66,12 +72,16 @@ struct FullSizePlayer: NSViewRepresentable {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func update(player: AVPlayer?, title: String, editor: PlayerEditingState? = nil) {
+    func update(player: AVPlayer?, title: String, editor: PlayerEditingState? = nil, showsEntryButton: Bool = true, usesNativeControls: Bool = true) {
         if playerView.player !== player {
             presentation.close(returnFocus: false)
             playerView.player = player
         }
         videoTitle = title
+        let layoutChanged = self.showsEntryButton != showsEntryButton || self.usesNativeControls != usesNativeControls
+        self.showsEntryButton = showsEntryButton; self.usesNativeControls = usesNativeControls
+        expandButton.isHidden = !showsEntryButton
+        if layoutChanged && presentation.panel == nil { restoreInlinePlayer() }
         if self.editor !== editor { self.editor?.detachHost(self); self.editor = editor }
         editor?.attachHost(self)
         expandButton.isEnabled = player != nil
@@ -89,11 +99,14 @@ struct FullSizePlayer: NSViewRepresentable {
             playerView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             playerView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             playerView.topAnchor.constraint(equalTo: container.topAnchor, constant: topInset),
-            playerView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -(container === self ? Self.entryBarHeight : bottomInset))
+            playerView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -(container === self ? (showsEntryButton ? Self.entryBarHeight : 0) : bottomInset))
         ]
         NSLayoutConstraint.activate(playerConstraints)
     }
-    func restoreInlinePlayer() { movePlayer(to: self) }
+    func restoreInlinePlayer() {
+        playerView.controlsStyle = usesNativeControls ? .floating : .none
+        movePlayer(to: self)
+    }
 }
 
 @MainActor final class FullSizePlayerPresentation: NSObject, NSWindowDelegate {

@@ -73,6 +73,10 @@ struct WaveformMixerView: View {
     @State private var issue: String?
     @State private var loading = false
     @State private var expanded = false
+    init(controls: VideoAudioControls, editor: PlayerEditingState, initiallyExpanded: Bool = false) {
+        self.controls = controls; self.editor = editor
+        _expanded = State(initialValue: initiallyExpanded)
+    }
     var body: some View {
         if controls.hasAudio {
             DisclosureGroup("Звуковые дорожки и громкость", isExpanded: $expanded) {
