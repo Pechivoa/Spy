@@ -163,7 +163,7 @@ struct RenameClipSheet: View {
             Label("Название видео", systemImage: "pencil").font(.system(size: 20, weight: .semibold))
             TextField("Например: Победа в последнем раунде", text: $name).textFieldStyle(.roundedBorder).onSubmit(save)
             Text(issue ?? "До 120 символов. Пустое название возвращает дату записи.").font(.system(size: 12)).foregroundStyle(issue == nil ? Theme.muted : Theme.accent)
-            HStack { Spacer(); Button("Отмена") { dismiss() }; Button("Сохранить", action: save).buttonStyle(.borderedProminent).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).count > 120) }
+            HStack { Spacer(); Button("Отмена") { dismiss() }; Button("Сохранить", action: save).buttonStyle(.borderedProminent).foregroundStyle(Theme.accentInk).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).count > 120) }
         }.padding(28).frame(width: 480).background(Theme.background).preferredColorScheme(.dark).tint(Theme.accent)
     }
     private func save() {

@@ -26,7 +26,7 @@ struct ShortcutCaptureSheet: View {
                     guard let candidate else { return }
                     do { try model.assignShortcut(candidate, to: action); dismiss() }
                     catch { issue = error.localizedDescription }
-                }.buttonStyle(.borderedProminent).disabled(candidate == nil || candidate?.validationError != nil)
+                }.buttonStyle(.borderedProminent).foregroundStyle(Theme.accentInk).disabled(candidate == nil || candidate?.validationError != nil)
             }
         }.padding(28).frame(width: 510).background(Theme.background).preferredColorScheme(.dark).tint(Theme.accent)
             .onAppear {
@@ -69,7 +69,7 @@ struct JournalView: View {
                     Label("События приложения", systemImage: "text.document").font(.system(size: 17, weight: .semibold))
                     Spacer()
                     Button { model.copyJournal(entries: selected) } label: { Label("Копировать", systemImage: "doc.on.doc") }.buttonStyle(.bordered).disabled(selected.isEmpty)
-                    Button { model.saveJournal(entries: selected) } label: { Label("Сохранить TXT", systemImage: "square.and.arrow.down") }.buttonStyle(.borderedProminent).disabled(selected.isEmpty)
+                    Button { model.saveJournal(entries: selected) } label: { Label("Сохранить TXT", systemImage: "square.and.arrow.down") }.buttonStyle(.borderedProminent).foregroundStyle(Theme.accentInk).disabled(selected.isEmpty)
                 }
                 HStack(spacing: 14) {
                     Picker("Уровень", selection: $filter) {

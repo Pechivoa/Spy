@@ -89,7 +89,7 @@ struct ProfilesView: View {
                 }.labelsHidden().frame(maxWidth: 350)
                 Button { choices = model.runningAppChoices() } label: { Image(systemName: "arrow.clockwise") }.help("Обновить приложения")
                 Spacer()
-                Button("Сохранить текущие настройки") { if let app = choices.first(where: { $0.id == selected }) { model.saveProfile(bundleID: app.id, name: app.name) } }.buttonStyle(.borderedProminent).disabled(selected.isEmpty)
+                Button("Сохранить текущие настройки") { if let app = choices.first(where: { $0.id == selected }) { model.saveProfile(bundleID: app.id, name: app.name) } }.buttonStyle(.borderedProminent).foregroundStyle(Theme.accentInk).disabled(selected.isEmpty)
             }
             Text("Профиль хранит качество, время, источники звука, выбранный микрофон и громкость. Смена профиля начинает буфер заново. Во время ручной записи изменения откладываются.").font(.system(size: 12)).foregroundStyle(Theme.muted).lineSpacing(4)
             if let active = model.activeProfileName { Label("Текущий профиль: " + active, systemImage: "checkmark.circle").font(.system(size: 12)).foregroundStyle(Theme.green) }
@@ -133,7 +133,7 @@ struct ProfileEditorSheet: View {
             Picker("Устройство микрофона", selection: $profile.settings.microphoneID) { ForEach(model.microphones) { Text($0.name).tag($0.id) }; if !model.microphones.contains(where: { $0.id == profile.settings.microphoneID }) { Text("Отключённое устройство").tag(profile.settings.microphoneID) } }
             HStack { Text("Громкость: \(Int(profile.settings.microphoneVolume * 100))%").frame(width: 140); Slider(value: $profile.settings.microphoneVolume, in: 0...1, step: 0.01) }.disabled(!profile.settings.microphone)
             Text("Микрофон сохраняется отдельной дорожкой для отключения в плеере.").font(.system(size: 11)).foregroundStyle(Theme.muted)
-            HStack { Spacer(); Button("Отмена") { dismiss() }; Button("Сохранить") { if let index = model.profiles.firstIndex(where: { $0.id == profile.id }) { model.profiles[index] = profile }; dismiss() }.buttonStyle(.borderedProminent) }
+            HStack { Spacer(); Button("Отмена") { dismiss() }; Button("Сохранить") { if let index = model.profiles.firstIndex(where: { $0.id == profile.id }) { model.profiles[index] = profile }; dismiss() }.buttonStyle(.borderedProminent).foregroundStyle(Theme.accentInk) }
         }.padding(28).frame(width: 540).background(Theme.background).preferredColorScheme(.dark).tint(Theme.accent)
     }
 }

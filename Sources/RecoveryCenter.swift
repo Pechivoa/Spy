@@ -106,7 +106,7 @@ private struct RecoveryFolderRow: View {
                     if let issue = summary.issue { Text(issue).font(.caption).foregroundStyle(.orange) }
                 } else { ProgressView().controlSize(.small) }
                 HStack {
-                    Button("Посмотреть") { Task { await model.previewRecovery(folder) } }.buttonStyle(.borderedProminent)
+                    Button("Посмотреть") { Task { await model.previewRecovery(folder) } }.buttonStyle(.borderedProminent).foregroundStyle(Theme.accentInk)
                     Button("Сохранить всё") { Task { await model.recoverRecording(folder) } }.buttonStyle(.bordered)
                     Button { NSWorkspace.shared.activateFileViewerSelecting([folder]) } label: { Image(systemName: "folder") }.help("Показать исходники")
                 }.disabled(model.saving || model.busy || model.manualRecording || model.bufferPreview != nil)

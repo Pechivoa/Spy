@@ -4,9 +4,9 @@ import CoreGraphics
 /// Reference: https://logowik.com/spyder-logo-vector-svg-png-free-download-21097.html
 /// The shared vector drives ICNS, SwiftUI, menu bar, toast and HUD.
 enum SpiderGlyph {
-    static let accentRed: CGFloat = 0.56
-    static let accentGreen: CGFloat = 0.42
-    static let accentBlue: CGFloat = 0.96
+    static let accentRed: CGFloat = 174 / 255
+    static let accentGreen: CGFloat = 151 / 255
+    static let accentBlue: CGFloat = 246 / 255
     static let accentCGColor = CGColor(colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
                                       components: [accentRed, accentGreen, accentBlue, 1])!
 

@@ -12,7 +12,9 @@ import AppKit
         if section == 19 { model.section = 7 }
         if section == 20 { model.section = 8 }
         if section == 21 { model.section = 0 }
+        if section == 24 || section == 25 { model.section = 0 }
         model.message = "Пример интерфейса · демонстрационные данные"
+        if section == 24 || section == 25 { model.message = nil }
         if let sourceURL {
             for index in 0..<3 {
                 let copied = model.libraryURL.appendingPathComponent("Preview-\(index).mov")
@@ -56,7 +58,7 @@ import AppKit
             model.audioMeter = AudioMeter(system: 0.12, microphone: 0.05)
         }
         if section == 3 {
-            model.journal.record(.info, "Пример: запуск", "Spy 1.14.0 запущен. Журнал сохраняется между запусками.")
+            model.journal.record(.info, "Пример: запуск", "Spy 1.15.0 запущен. Журнал сохраняется между запусками.")
             model.journal.record(.info, "Пример: настройка клавиш", "Сохранить повтор → ⌃⇧S")
             model.journal.record(.warning, "Пример: доступ к экрану", "Разрешение ещё не получено. Разрешите Spy запись экрана в настройках macOS.")
             model.journal.record(.error, "Пример: захват экрана", "Не удалось запустить захват.\nДомен: com.apple.ScreenCaptureKit.SCStreamErrorDomain · Код: −3801")
@@ -66,17 +68,21 @@ import AppKit
             model.recording = true
             model.stats = BufferStats(seconds: 118, bytes: 24_000_000, frameCount: 7000)
         }
+        if section == 24 || section == 25 {
+            model.recording = true
+            model.stats = BufferStats(seconds: 612, bytes: 212_000_000, frameCount: 18_360)
+        }
         if section == 16 || section == 17 { model.recoveryFolders = [model.cacheURL.appendingPathComponent("record-replay-crash-example")] }
         defer { try? FileManager.default.removeItem(at: model.libraryURL.deletingLastPathComponent()) }
-        let width: CGFloat = section == 22 ? 720 : section == 15 ? 1040 : section == 14 ? 56 : section == 12 || section == 16 ? 340 : section == 13 || section == 17 ? 280 : section == 23 ? 720 : section == 4 ? 1040 : section == 5 ? 350 : section == 8 ? 112 : section == 10 ? 540 : 1160
-        let height: CGFloat = section == 22 ? 540 : section == 15 ? 800 : section == 14 ? 18 : section == 12 || section == 16 ? 380 : section == 13 || section == 17 ? 150 : section == 23 ? 540 : section == 4 ? 800 : section == 5 ? 82 : section == 8 ? 24 : section == 10 ? 530 : section == 0 || section == 9 ? 1250 : section == 2 ? 1580 : section == 7 ? 1100 : 820
+        let width: CGFloat = section == 24 ? 1060 : section == 25 ? 900 : section == 22 ? 720 : section == 15 ? 1040 : section == 14 ? 56 : section == 12 || section == 16 ? 340 : section == 13 || section == 17 ? 280 : section == 23 ? 720 : section == 4 ? 1040 : section == 5 ? 350 : section == 8 ? 112 : section == 10 ? 540 : 1160
+        let height: CGFloat = section == 24 ? 800 : section == 25 ? 640 : section == 22 ? 540 : section == 15 ? 800 : section == 14 ? 18 : section == 12 || section == 16 ? 380 : section == 13 || section == 17 ? 150 : section == 23 ? 540 : section == 4 ? 800 : section == 5 ? 82 : section == 8 ? 24 : section == 10 ? 530 : section == 0 || section == 9 ? 1250 : section == 2 ? 1580 : section == 7 ? 1100 : 820
         let root: AnyView
         if (section == 15 || section == 22), let clip = model.clips.first {
             let preview = BufferPreview(directory: clip.url.deletingLastPathComponent(), clip: clip, capturedAt: Date())
             model.bufferPreview = preview
             root = AnyView(BufferPreviewSheet(preview: preview, model: model))
         }
-        else if section == 12 || section == 13 || section == 16 || section == 17 { root = AnyView(SpyWindowView(model: model)) }
+        else if section == 12 || section == 13 || section == 16 || section == 17 || section == 24 || section == 25 { root = AnyView(SpyWindowView(model: model)) }
         else if (section == 4 || section == 23), let clip = model.clips.first { root = AnyView(PlayerSheet(clip: clip, model: model)) }
         else if section == 8 { root = AnyView(HUDView(value: HUDState(recording: true, manual: true, seconds: 521, bytes: 470_000_000, battery: true))) }
         else if section == 14 { root = AnyView(HUDView(value: HUDState(recording: true, manual: false, seconds: 521, bytes: 470_000_000, battery: false), width: 56, height: 18)) }

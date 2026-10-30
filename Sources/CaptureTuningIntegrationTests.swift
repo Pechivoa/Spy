@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import AppKit
 
 /// Runs the actual ring/export stack with both codecs and permanent privacy
 /// regions. Generated frames/audio only; no ScreenCaptureKit or real devices.
@@ -28,6 +29,16 @@ import AVFoundation
             engine.testFrame(source, at: CMTime(value: 90_000, timescale: 30))
             let after = try samplePixel(source, x: 100, y: 60)
             try SelfTest.require(after == before, "Mask application never mutates the caller/provider pixel buffer")
+            guard let thumbnail = await engine.overviewThumbnail() else { throw SpyError.message("TEST FAILED: overview frame is available") }
+            let bitmap = NSBitmapImageRep(cgImage: thumbnail)
+            let hidden = bitmap.colorAt(x: 100, y: 60)!.usingColorSpace(.deviceRGB)!
+            let visible = bitmap.colorAt(x: 10, y: 10)!.usingColorSpace(.deviceRGB)!
+            try SelfTest.require(thumbnail.width <= 640 && max(hidden.redComponent, hidden.greenComponent, hidden.blueComponent) < 0.03 && visible.redComponent > 0.2,
+                "Overview is bounded and preserves the encoder's opaque privacy mask and visible surroundings")
+            engine.requestPrivacyBlock(true)
+            let blockedThumbnail = await engine.overviewThumbnail()
+            try SelfTest.require(blockedThumbnail == nil, "Privacy block immediately disables the overview frame")
+            engine.requestPrivacyBlock(false)
             for frame in 1..<120 {
                 let pts = CMTime(value: 90_000 + Int64(frame), timescale: 30)
                 engine.testFrame(try SelfTest.pixel(frame: frame), at: pts)
@@ -68,6 +79,8 @@ import AVFoundation
             let manualPlayback = try await BufferPlayback.prepare(manual, levels: AudioLevels())
             try SelfTest.require(manualPlayback.duration >= 3.9, "\(codec.rawValue) manual recording remains pinned while the short ring rotates")
             await engine.stop(preserveForRecovery: true)
+            let stoppedThumbnail = await engine.overviewThumbnail()
+            try SelfTest.require(stoppedThumbnail == nil, "Stopped capture cannot show a stale overview frame")
             let recoveryFolders = try FileManager.default.contentsOfDirectory(at: cache, includingPropertiesForKeys: nil)
                 .filter { $0.lastPathComponent.hasPrefix("record-replay-failure-") }
             try SelfTest.require(recoveryFolders.count == 1, "\(codec.rawValue) recovery retains the completed ring")

@@ -4,6 +4,7 @@ import AVFoundation
 @preconcurrency import ScreenCaptureKit
 import CoreMedia
 import VideoToolbox
+import CoreImage
 
 enum Quality: String, CaseIterable, Identifiable, Codable {
     case compact, balanced, smooth, native
@@ -122,6 +123,25 @@ final class SpyEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Se
     private var usesApplicationAudio = false
     private var ticker: DispatchSourceTimer?
     private var latestPixel: CVPixelBuffer?
+    private let overviewQueue = DispatchQueue(label: "local.spy.overview", qos: .utility)
+    private lazy var overviewContext = CIContext(options: [.cacheIntermediates: false])
+
+    func overviewThumbnail() async -> CGImage? {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                guard active, !privacyBlockRequested, !privacyPaused, !privacyFilterUpdating,
+                      let pixel = latestPixel else { continuation.resume(returning: nil); return }
+                // Retain one already owned, masked frame briefly; scaling never
+                // occupies the encoder queue or retains a ScreenCaptureKit surface.
+                overviewQueue.async { [self] in
+                    let source = CIImage(cvPixelBuffer: pixel)
+                    let scale = min(1, 640 / max(source.extent.width, source.extent.height))
+                    let small = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                    continuation.resume(returning: overviewContext.createCGImage(small, from: small.extent))
+                }
+            }
+        }
+    }
     private let ownedFrames = OwnedScreenFrames()
     private var sourceWarning: String?
     private var darkSince: Double?

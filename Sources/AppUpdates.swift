@@ -200,7 +200,7 @@ enum SpyUpdateInstaller {
             if let data = try? Data(contentsOf: file), data.count <= 16_384 { status = String(data: data, encoding: .utf8) }
         }
     }
-    static var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.14.0" }
+    static var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.15.0" }
     var hasUpdate: Bool { release.map { (try? SpyVersion($0.tag_name) > SpyVersion(Self.currentVersion)) == true } ?? false }
     func check() async {
         guard !working else { return }; working = true; defer { working = false }
@@ -286,7 +286,7 @@ struct AppUpdatesView: View {
             HStack {
                 Button("Проверить обновления") { Task { await updates.check() } }.disabled(updates.working)
                 if updates.hasUpdate {
-                    Button("Скачать и установить") { Task { await updates.install() } }.buttonStyle(.borderedProminent).disabled(updates.working || !installAllowed)
+                    Button("Скачать и установить") { Task { await updates.install() } }.buttonStyle(.borderedProminent).foregroundStyle(Theme.accentInk).disabled(updates.working || !installAllowed)
                 }
                 if updates.working { ProgressView().controlSize(.small) }
             }

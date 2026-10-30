@@ -562,7 +562,7 @@ struct FullscreenEditingToolbar: View {
                         if editor.isSaving { ProgressView().controlSize(.small) }
                         Text(editor.isSaving ? "Сохраняется…" : "Сохранить фрагмент")
                     }
-                }.buttonStyle(.borderedProminent).disabled(!editor.canSave)
+                }.buttonStyle(.borderedProminent).foregroundStyle(Theme.accentInk).disabled(!editor.canSave)
             }
             if !editor.markers.isEmpty {
                 MomentMarkerStrip(markers: editor.markers, onSeek: { editor.seek($0) })

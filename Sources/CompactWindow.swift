@@ -6,7 +6,7 @@ import AppKit
     var recording = false { didSet { updateCaptureProtection() } }
     static let minimum = NSSize(width: 280, height: 150)
     static let compact = NSSize(width: 340, height: 380)
-    static let expanded = NSSize(width: 1160, height: 820)
+    static let expanded = NSSize(width: 1060, height: 800)
 
     func attach(_ window: NSWindow) {
         guard self.window !== window else { return }
@@ -93,7 +93,7 @@ struct SpyWindowView: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         GeometryReader { geometry in
-            let compact = geometry.size.width < 1060 || geometry.size.height < 800
+            let compact = geometry.size.width < 900 || geometry.size.height < 640
             VStack(spacing: 0) {
                 toolbar(compact: compact, tiny: geometry.size.height < 240)
                 if compact { CompactSpyView(model: model, window: window, tiny: geometry.size.height < 240) }
@@ -191,6 +191,7 @@ struct CompactSpyView: View {
                         else { Image(systemName: model.recording ? "stop.fill" : "record.circle") }
                         Text(model.recording ? "Стоп" : "Включить").fontWeight(.semibold)
                     }.frame(maxWidth: .infinity).frame(height: tiny ? 32 : 38)
+                        .foregroundStyle(model.recording ? Color.white : Theme.accentInk)
                         .background(model.recording ? Color.white.opacity(0.08) : Theme.accent, in: RoundedRectangle(cornerRadius: 9))
                 }.buttonStyle(.plain).disabled(model.diagnosticsBusy || model.busy || model.saving || (!model.recording && model.minutes == 0))
                 Button { Task { await model.openBufferPreview() } } label: {
@@ -204,7 +205,7 @@ struct CompactSpyView: View {
                 Button { Task { await model.saveSpy() } } label: {
                     Label(model.saving ? "Сохранение…" : "Сохранить", systemImage: "square.and.arrow.down")
                         .fontWeight(.semibold).frame(maxWidth: .infinity).frame(height: tiny ? 32 : 38)
-                        .foregroundStyle(model.canSave ? .white : Theme.muted)
+                        .foregroundStyle(model.canSave ? Theme.accentInk : Theme.muted)
                         .background(model.canSave ? Theme.accent : Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 9))
                 }.buttonStyle(.plain).disabled(!model.canSave).help(model.shortcuts.save.label)
             }.font(.system(size: 12))

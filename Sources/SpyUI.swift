@@ -3,11 +3,12 @@ import AVKit
 import AppKit
 
 enum Theme {
-    static let background = Color(red: 0.075, green: 0.075, blue: 0.10)
-    static let panel = Color(red: 0.12, green: 0.12, blue: 0.155)
-    static let sidebar = Color(red: 0.095, green: 0.095, blue: 0.125)
-    static let border = Color.white.opacity(0.09)
-    static let muted = Color(red: 0.62, green: 0.62, blue: 0.70)
+    static let background = Color(red: 5 / 255, green: 5 / 255, blue: 5 / 255)
+    static let panel = Color(red: 17 / 255, green: 17 / 255, blue: 19 / 255)
+    static let sidebar = Color(red: 9 / 255, green: 9 / 255, blue: 11 / 255)
+    static let border = Color(red: 43 / 255, green: 43 / 255, blue: 49 / 255)
+    static let muted = Color(red: 160 / 255, green: 157 / 255, blue: 169 / 255)
+    static let accentInk = Color(red: 27 / 255, green: 20 / 255, blue: 46 / 255)
     static let accent = Color(red: Double(SpiderGlyph.accentRed), green: Double(SpiderGlyph.accentGreen), blue: Double(SpiderGlyph.accentBlue))
     static let brand = accent
     static let danger = Color(red: 1, green: 0.40, blue: 0.44)
@@ -143,8 +144,8 @@ struct ContentView: View {
         }
     }
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
+        VStack(spacing: 0) {
+            navigationBar
             ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
@@ -162,8 +163,7 @@ struct ContentView: View {
                         }.padding(14).background(Theme.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
                     }
                     if model.section == 0 {
-                        capturePanel
-                        metrics
+                        ObsidianCaptureView(model: model)
                     } else if model.section == 2 {
                         settingsPanel
                     } else if model.section == 4 {
@@ -180,17 +180,18 @@ struct ContentView: View {
                         JournalView(model: model, journal: journal)
                     }
                     if model.section == 0 || model.section == 1 { library }
-                    footer
-                }.padding(26)
+                }.padding(30)
             }.background(Theme.background)
                 .onChange(of: model.captureIssue) { _, value in
                     if value != nil { withAnimation { proxy.scrollTo("capture-top", anchor: .top) } }
                 }
             }
+            footer.padding(.horizontal, 24).padding(.vertical, 10).background(Theme.sidebar)
+                .overlay(alignment: .top) { Rectangle().fill(Theme.border).frame(height: 1) }
         }
         .foregroundStyle(.white)
         .font(.system(size: 14))
-        .frame(minWidth: 1060, minHeight: 750)
+        .frame(minWidth: 900, minHeight: 600)
         .background(Theme.background)
         .tint(Theme.accent)
         .alert("Spy", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
@@ -206,63 +207,55 @@ struct ContentView: View {
         .sheet(item: $model.editingShortcut) { action in ShortcutCaptureSheet(action: action, model: model) }
     }
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                SpyMark().fill(Theme.brand).frame(width: 22, height: 28)
-                    .frame(width: 36, height: 36).background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 11))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Spy").font(.system(size: 22, weight: .semibold))
-                    Text("Screen recorder").font(.system(size: 10)).foregroundStyle(Theme.muted)
+    private var navigationBar: some View {
+        HStack(spacing: 22) {
+            HStack(spacing: 9) {
+                SpyMark().fill(Theme.accent).frame(width: 23, height: 30)
+                Text("Spy").font(.system(size: 21, weight: .medium))
+            }.frame(width: 140, alignment: .leading)
+            Spacer(minLength: 0)
+            topLink("Повтор", section: 0)
+            topLink("Библиотека", section: 1)
+            Button { model.showExportQueue() } label: {
+                HStack(spacing: 6) {
+                    Text("Очередь")
+                    if model.queuedExports > 0 { Text("\(model.queuedExports)").foregroundStyle(Theme.accent).monospacedDigit() }
                 }
-            }.padding(.top, 24).padding(.bottom, 28)
-            Text("БИБЛИОТЕКА И ЗАПИСЬ").font(.system(size: 9, weight: .medium)).tracking(1).foregroundStyle(Theme.muted).padding(.bottom, 12)
-            navItem("Мгновенный повтор", icon: "arrow.counterclockwise", section: 0)
-            navItem("Библиотека", icon: "play.rectangle", section: 1)
-            navItem("Настройки", icon: "slider.horizontal.3", section: 2)
-            navItem("Профили", icon: "square.stack.3d.up", section: 4)
-            navItem("Дополнительно", icon: "gearshape.2", section: 5)
-            navItem("Восстановление", icon: "arrow.counterclockwise.circle", section: 6)
-            navItem("Хранилище", icon: "internaldrive", section: 7)
-            navItem("История сессий", icon: "clock.arrow.circlepath", section: 8)
-            navItem("Журнал ошибок", icon: "text.document", section: 3)
-            Spacer()
-            VStack(alignment: .leading, spacing: 13) {
-                HStack(spacing: 7) {
-                    Circle().fill(model.privacyPaused ? Theme.accent : model.recording ? Theme.green : Theme.muted).frame(width: 6, height: 6)
-                    Text(model.privacyPaused ? "Запись на паузе" : model.manualRecording ? "Запись сеанса" : model.recording ? "Буфер активен" : model.startupStatus != nil ? "Запускается…" : model.needsPermission ? "Нужен доступ к экрану" : model.captureIssue != nil ? "Ошибка запуска" : "Готов к записи").font(.system(size: 12, weight: .medium))
-                }
-                Text(model.recording ? "Последние \(model.effectiveDurationLabel)\nсохраняются в фоне" : "Включите повтор перед\nигрой или работой").font(.system(size: 11)).lineSpacing(4).foregroundStyle(Theme.muted)
-                Divider().overlay(Theme.border)
-                HStack {
-                    Image(systemName: "internaldrive").foregroundStyle(Theme.muted)
-                    Text("\(fileSize(model.freeSpace)) свободно").font(.system(size: 11)).foregroundStyle(Theme.muted)
-                }
-            }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(Theme.panel, in: RoundedRectangle(cornerRadius: 14))
-            Text("SPY FOR MAC  /  1.14.0").font(.system(size: 9, weight: .medium)).tracking(1.4).foregroundStyle(Theme.muted.opacity(0.6)).padding(.top, 20).padding(.bottom, 24)
-        }.padding(.horizontal, 16).frame(width: 210).background(Theme.sidebar)
-            .overlay(alignment: .trailing) { Rectangle().fill(Theme.border).frame(width: 1) }
+            }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                .accessibilityIdentifier("Spy.Navigation.Queue")
+            Spacer(minLength: 0)
+            Menu {
+                Button("Профили приложений") { model.section = 4 }
+                Button("Сессия и автосохранение") { model.section = 5 }
+                Button("Восстановление") { model.section = 6 }
+                Button("Хранилище") { model.section = 7 }
+                Button("История сессий") { model.section = 8 }
+                Button(journal.errorCount > 0 ? "Журнал ошибок · \(journal.errorCount)" : "Журнал ошибок") { model.section = 3 }
+                Divider()
+                Button("Настройки записи") { model.section = 2 }
+                Button("Открыть папку видео") { model.openFolder() }
+            } label: { Image(systemName: "ellipsis").frame(width: 28, height: 28) }
+                .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Все разделы Spy")
+            Button { model.section = 2 } label: { Image(systemName: "slider.horizontal.3").frame(width: 28, height: 28) }
+                .buttonStyle(.plain).accessibilityLabel("Настройки записи")
+        }.padding(.horizontal, 28).padding(.vertical, 15).background(Theme.sidebar)
+            .overlay(alignment: .bottom) { Rectangle().fill(Theme.border).frame(height: 1) }
     }
-    private func navItem(_ title: String, icon: String, section: Int) -> some View {
+    private func topLink(_ title: String, section: Int) -> some View {
         Button { model.section = section } label: {
-            HStack(spacing: 11) {
-                Image(systemName: icon).font(.system(size: 15)).frame(width: 18)
-                Text(title).font(.system(size: 12, weight: model.section == section ? .semibold : .regular))
-                Spacer(minLength: 0)
-                if section == 1 && !model.clips.isEmpty { Text("\(model.clips.count)").font(.system(size: 10, weight: .medium)).padding(.horizontal, 6).padding(.vertical, 3).background(Color.white.opacity(0.07), in: Capsule()) }
-                if section == 3 && journal.errorCount > 0 { Text("\(journal.errorCount)").font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.accent).padding(.horizontal, 6).padding(.vertical, 3).background(Theme.accent.opacity(0.1), in: Capsule()) }
-            }.foregroundStyle(model.section == section ? .white : Theme.muted)
-                .padding(.horizontal, 10).padding(.vertical, 12)
-                .background(model.section == section ? Theme.accent.opacity(0.17) : .clear, in: RoundedRectangle(cornerRadius: 9))
-        }.buttonStyle(.plain).padding(.bottom, 5)
+            Text(title).font(.system(size: 12, weight: model.section == section ? .medium : .regular))
+                .foregroundStyle(model.section == section ? .white : Theme.muted)
+                .padding(.horizontal, 13).padding(.vertical, 8)
+                .background(model.section == section ? Theme.panel : .clear, in: RoundedRectangle(cornerRadius: 7))
+        }.buttonStyle(.plain)
     }
 
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 8) {
-                Text(model.section == 0 ? "Запись и повторы" : model.section == 1 ? "Библиотека видео" : model.section == 3 ? "Журнал ошибок" : model.section == 4 ? "Профили приложений" : model.section == 5 ? "Сессия и автосохранение" : model.section == 6 ? "Центр восстановления" : model.section == 7 ? "Хранилище Spy" : model.section == 8 ? "История сессий" : "Настройки записи")
+                Text(model.section == 0 ? "Мгновенный повтор" : model.section == 1 ? "Библиотека видео" : model.section == 3 ? "Журнал ошибок" : model.section == 4 ? "Профили приложений" : model.section == 5 ? "Сессия и автосохранение" : model.section == 6 ? "Центр восстановления" : model.section == 7 ? "Хранилище Spy" : model.section == 8 ? "История сессий" : "Настройки записи")
                     .font(.system(size: 24, weight: .semibold)).tracking(-0.5)
-                Text(model.section == 0 ? "Последние минуты всегда под рукой." : model.section == 1 ? "Предпросмотр, монтаж и сохранённые моменты." : model.section == 3 ? "События, диагностика и экспорт в TXT." : model.section == 4 ? "Свои настройки для каждого приложения." : model.section == 5 ? "Восстановление, индикатор и работа в фоне." : model.section == 6 ? "Предпросмотр и сохранение незавершённых записей." : model.section == 7 ? "Размеры данных и выбранная очистка через Корзину." : model.section == 8 ? "Запись, паузы и сохранённые моменты." : "Источники, качество, звук и горячие клавиши.")
+                Text(model.section == 0 ? "Последние минуты экрана — перед сохранением можно посмотреть." : model.section == 1 ? "Предпросмотр, монтаж и сохранённые моменты." : model.section == 3 ? "События, диагностика и экспорт в TXT." : model.section == 4 ? "Свои настройки для каждого приложения." : model.section == 5 ? "Восстановление, индикатор и работа в фоне." : model.section == 6 ? "Предпросмотр и сохранение незавершённых записей." : model.section == 7 ? "Размеры данных и выбранная очистка через Корзину." : model.section == 8 ? "Запись, паузы и сохранённые моменты." : "Источники, качество, звук и горячие клавиши.")
                     .font(.system(size: 13)).foregroundStyle(Theme.muted)
             }
             Spacer()
@@ -272,93 +265,6 @@ struct ContentView: View {
             }.foregroundStyle(model.recording ? Theme.green : Theme.muted).padding(.horizontal, 12).padding(.vertical, 9)
                 .background(Color.white.opacity(0.04), in: Capsule()).overlay(Capsule().stroke(Theme.border))
         }.padding(.top, 10)
-    }
-
-    private var capturePanel: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            if let warning = model.stats.sourceWarning {
-                Label(warning, systemImage: "exclamationmark.triangle.fill").font(.system(size: 12))
-                    .foregroundStyle(Theme.accent).fixedSize(horizontal: false, vertical: true)
-            }
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 7) {
-                    Label("Повтор в фоне", systemImage: "arrow.counterclockwise").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.muted)
-                    Text(model.minutes == 0 ? "Выберите время повтора" : "Последние \(model.effectiveDurationLabel)").font(.system(size: 23, weight: .semibold)).tracking(-0.4)
-                    Text("Старые кадры автоматически уступают место новым.").font(.system(size: 12)).foregroundStyle(Theme.muted)
-                    Text(model.captureTargetSummary).font(.system(size: 11)).foregroundStyle(Theme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
-                Label(model.effectiveQuality.title, systemImage: "viewfinder").font(.system(size: 11, weight: .medium))
-                    .padding(.horizontal, 12).padding(.vertical, 9).background(Color.white.opacity(0.045), in: Capsule())
-            }
-            VStack(spacing: 9) {
-                Slider(value: $model.minutes, in: 0...30, step: 0.5).accessibilityLabel("Время повтора в минутах")
-                    .disabled(model.diagnosticsBusy || model.busy || model.saving || model.manualRecording)
-                HStack {
-                    Text("0 · ВЫКЛ.")
-                    Spacer(); Text("10 МИН"); Spacer(); Text("20 МИН"); Spacer(); Text("30 МИН")
-                }.font(.system(size: 9, weight: .medium)).tracking(0.8).foregroundStyle(Theme.muted)
-            }
-            HStack {
-                Label("Примерный размер", systemImage: "internaldrive").font(.system(size: 12)).foregroundStyle(Theme.muted)
-                Spacer()
-                Text("≈ \(fileSize(model.estimatedBytes))").font(.system(size: 14, weight: .semibold, design: .monospaced))
-                Text("/ \(model.effectiveDurationLabel)").font(.system(size: 11)).foregroundStyle(Theme.muted)
-            }.padding(13).background(Color.black.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
-            HStack(spacing: 12) {
-                Button { Task { await model.toggleRecording() } } label: {
-                    HStack(spacing: 8) {
-                        if model.busy { ProgressView().controlSize(.small) } else { Image(systemName: model.recording ? "stop.fill" : "record.circle") }
-                        Text(model.startupStatus ?? (model.busy ? "Подождите…" : model.recording ? "Остановить" : "Включить повтор")).fontWeight(.semibold)
-                    }.frame(height: 20).padding(.horizontal, 17).padding(.vertical, 12)
-                        .foregroundStyle(.white).background(model.recording ? Color.white.opacity(0.08) : Theme.accent, in: RoundedRectangle(cornerRadius: 10))
-                }.buttonStyle(.plain).disabled(model.diagnosticsBusy || model.busy || model.saving || (!model.recording && model.minutes == 0))
-                Button { Task { await model.saveSpy() } } label: {
-                    HStack(spacing: 8) {
-                        if model.saving { ProgressView().controlSize(.small) } else { Image(systemName: "square.and.arrow.down") }
-                        Text(model.saving ? "Сохраняется…" : "Сохранить повтор").fontWeight(.semibold)
-                        Text(model.shortcuts.save.label).font(.system(size: 11)).foregroundStyle(model.canSave ? Color.white.opacity(0.7) : Theme.muted).padding(.leading, 4)
-                    }.frame(height: 20).padding(.horizontal, 17).padding(.vertical, 12)
-                        .foregroundStyle(model.canSave ? .white : Theme.muted).background(model.canSave ? Theme.accent : Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border))
-                }.buttonStyle(.plain).disabled(!model.canSave)
-                Button { Task { await model.openBufferPreview() } } label: {
-                    HStack(spacing: 8) {
-                        if model.preparingBufferPreview { ProgressView().controlSize(.small) }
-                        else { Image(systemName: "play.rectangle") }
-                        Text(model.preparingBufferPreview ? "Подготовка…" : "Просмотреть буфер").fontWeight(.medium)
-                    }.frame(height: 20).padding(.horizontal, 13).padding(.vertical, 12)
-                        .foregroundStyle(model.canPreviewBuffer ? .white : Theme.muted)
-                        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
-                }.buttonStyle(.plain).disabled(!model.canPreviewBuffer && model.bufferPreview == nil)
-                    .help("Открыть видео из буфера, затем решить, сохранять ли его")
-                Spacer()
-                Text(model.shortcuts.toggle.label + " — вкл. / выкл.").font(.system(size: 10)).foregroundStyle(Theme.muted)
-            }
-            QuickSaveView(model: model)
-            PerformancePanel(actualFPS: model.recording && !model.privacyPaused ? model.stats.actualFPS : 0, droppedFrames: model.stats.droppedFrames, targetFPS: (model.recordingQuality ?? model.effectiveQuality).fps, monitor: model.performance)
-            ManualControlsView(model: model)
-            if let active = model.activeProfileName { Label("Профиль: " + active, systemImage: "square.stack.3d.up").font(.system(size: 11)).foregroundStyle(Theme.muted) }
-            if model.batterySaving && model.onBattery { Label("От батареи: \(model.effectiveQuality.title) · буфер до \(model.effectiveMinutes.formatted()) мин", systemImage: "leaf.fill").font(.system(size: 11)).foregroundStyle(Theme.green) }
-            Divider().overlay(Theme.border)
-            CaptureTargetView(model: model)
-            VStack(alignment: .leading, spacing: 11) {
-                HStack {
-                    smallLabel("ЧТО БУДЕТ СЛЫШНО В ВИДЕО")
-                    Spacer()
-                    Text(model.audioSummary).font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.muted)
-                }
-                HStack(spacing: 12) {
-                    audioSwitch("Звук системы", detail: "Игры, приложения и звук macOS", icon: "speaker.wave.2", value: $model.systemAudio)
-                    audioSwitch("Микрофон", detail: "Ваш голос · выбранное устройство", icon: "mic", value: $model.microphone)
-                        .disabled(!model.microphoneAvailable)
-                }
-                AudioControlsView(model: model)
-                ApplicationAudioPickerView(model: model)
-                if !model.microphoneAvailable { Text("Запись микрофона доступна на macOS 15 и новее.").font(.system(size: 10)).foregroundStyle(Theme.muted) }
-            }
-        }.padding(24).background(Theme.panel, in: RoundedRectangle(cornerRadius: 18)).overlay(RoundedRectangle(cornerRadius: 18).stroke(Theme.border))
     }
 
     private func captureProblem(_ issue: String) -> some View {
@@ -382,40 +288,6 @@ struct ContentView: View {
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.danger.opacity(0.18)))
     }
 
-    private func audioSwitch(_ title: String, detail: String, icon: String, value: Binding<Bool>) -> some View {
-        HStack(spacing: 11) {
-            Image(systemName: icon).font(.system(size: 17)).foregroundStyle(value.wrappedValue ? Theme.accent : Theme.muted).frame(width: 23)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title).font(.system(size: 12, weight: .semibold))
-                Text(detail).font(.system(size: 10)).foregroundStyle(Theme.muted)
-            }
-            Spacer(minLength: 5)
-            Toggle(title, isOn: value).labelsHidden().toggleStyle(.switch).controlSize(.small)
-        }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(Color.black.opacity(0.15), in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(value.wrappedValue ? Theme.accent.opacity(0.16) : Theme.border)).disabled(model.recording || model.diagnosticsBusy || model.busy || model.saving)
-    }
-
-    private var metrics: some View {
-        HStack(spacing: 14) {
-            metric(model.manualRecording ? "РУЧНАЯ ЗАПИСЬ" : "В БУФЕРЕ", value: clockText(model.manualRecording ? model.stats.manualSeconds : model.stats.seconds), caption: model.manualRecording ? "полный сеанс" : "из \(clockText(model.effectiveMinutes * 60))", icon: "clock.arrow.circlepath")
-            metric(model.manualRecording ? "РАЗМЕР ЗАПИСИ" : "РАЗМЕР БУФЕРА", value: fileSize(model.manualRecording ? model.stats.manualBytes : model.stats.bytes), caption: "фактически на диске", icon: "internaldrive")
-            metric("СОХРАНЕНО", value: "\(model.clips.count) видео", caption: fileSize(model.totalLibraryBytes) + " в библиотеке", icon: "play.rectangle")
-        }
-    }
-    private func metric(_ title: String, value: String, caption: String, icon: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: icon).font(.system(size: 17)).foregroundStyle(Theme.muted).padding(.top, 2)
-            VStack(alignment: .leading, spacing: 6) {
-                smallLabel(title)
-                Text(value).font(.system(size: 21, weight: .semibold, design: .rounded))
-                Text(caption).font(.system(size: 10)).foregroundStyle(Theme.muted)
-            }
-            Spacer(minLength: 0)
-        }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(Theme.panel, in: RoundedRectangle(cornerRadius: 13)).overlay(RoundedRectangle(cornerRadius: 13).stroke(Theme.border))
-    }
-    private func smallLabel(_ title: String) -> some View {
-        Text(title).font(.system(size: 9, weight: .semibold)).tracking(1).foregroundStyle(Theme.muted)
-    }
-
     private var library: some View {
         VStack(alignment: .leading, spacing: 17) {
             HStack {
@@ -428,7 +300,7 @@ struct ContentView: View {
             if model.section == 1 && !model.clips.isEmpty {
                 HStack(spacing: 12) {
                     TextField("Найти по названию, дате или файлу", text: $search).textFieldStyle(.roundedBorder)
-                    Toggle(isOn: $favoritesOnly) { Label("Избранное", systemImage: "star.fill") }.toggleStyle(.button).tint(.orange)
+                    Toggle(isOn: $favoritesOnly) { Label("Избранное", systemImage: "star.fill") }.toggleStyle(.button).tint(Theme.accent)
                     Text(fileSize(model.totalLibraryBytes)).font(.system(size: 11)).foregroundStyle(Theme.muted)
                 }
             }
@@ -442,6 +314,14 @@ struct ContentView: View {
                     Spacer()
                 }.padding(26).frame(maxWidth: .infinity).background(Theme.panel.opacity(0.55), in: RoundedRectangle(cornerRadius: 14))
                     .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border, style: StrokeStyle(lineWidth: 1, dash: [5, 5])))
+            } else if model.section == 0 {
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(Array(model.clips.prefix(3))) { clip in
+                        RecentMomentRow(clip: clip) { model.selectedClip = clip }
+                    }
+                }
+                Button("Вся библиотека →") { model.section = 1 }.buttonStyle(.plain)
+                    .font(.system(size: 11)).foregroundStyle(Theme.muted)
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 14)], spacing: 14) {
                     ForEach(Array(visibleClips.prefix(model.section == 0 ? 6 : Int.max))) { clip in
@@ -553,7 +433,7 @@ struct ClipCard: View {
                     Text(fileSize(clip.bytes)).font(.system(size: 10)).foregroundStyle(Theme.muted)
                 }
                 Spacer(minLength: 4)
-                Button(action: favorite) { Image(systemName: clip.favorite ? "star.fill" : "star").font(.system(size: 12)).foregroundStyle(clip.favorite ? Color.orange : Theme.muted) }.buttonStyle(.plain).help(clip.favorite ? "Убрать из избранного" : "Добавить в избранное")
+                Button(action: favorite) { Image(systemName: clip.favorite ? "star.fill" : "star").font(.system(size: 12)).foregroundStyle(clip.favorite ? Theme.accent : Theme.muted) }.buttonStyle(.plain).help(clip.favorite ? "Убрать из избранного" : "Добавить в избранное")
                 Button(action: delete) { Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(hovered ? Theme.accent : Theme.muted) }.buttonStyle(.plain).help("Удалить видео").disabled(deletingDisabled)
             }.padding(13)
         }.background(Theme.panel).clipShape(RoundedRectangle(cornerRadius: 13)).overlay(RoundedRectangle(cornerRadius: 13).stroke(Theme.border))

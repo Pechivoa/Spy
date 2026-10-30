@@ -360,7 +360,7 @@ struct BufferPreviewSheet: View {
                 } label: {
                     Label(pendingSelection ? "В очереди" : savedURL != nil ? "Сохранено" : entireBuffer ? "Сохранить видео" : "Сохранить фрагмент",
                           systemImage: savedURL == nil ? "square.and.arrow.down" : "checkmark")
-                }.buttonStyle(.borderedProminent).disabled(model.previewBusy || !editor.canSave || pendingSelection || savedURL != nil || range == nil)
+                }.buttonStyle(.borderedProminent).foregroundStyle(Theme.accentInk).disabled(model.previewBusy || !editor.canSave || pendingSelection || savedURL != nil || range == nil)
                     .accessibilityIdentifier("Spy.BufferPreview.Save")
             }.buttonStyle(.bordered)
         }

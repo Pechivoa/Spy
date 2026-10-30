@@ -87,7 +87,7 @@ struct PlayerSheet: View {
             }
             Spacer(minLength: 4)
             Button { model.toggleFavorite(current) } label: { Image(systemName: current.favorite ? "star.fill" : "star") }
-                .foregroundStyle(current.favorite ? Color.orange : Color.white).help("Избранное")
+                .foregroundStyle(current.favorite ? Theme.accent : Color.white).help("Избранное")
             Menu {
                 Button("Назвать видео") { rename = true }
                 Button("Экспортировать MP4") { Task { await model.exportMP4(clip, microphoneEnabled: microphoneEnabled, levels: audioLevels) } }
@@ -113,7 +113,7 @@ struct PlayerSheet: View {
                     result = nil; trimError = nil
                     do { _ = try enqueue(first: start, last: end, microphone: microphoneEnabled) }
                     catch { trimError = error.localizedDescription }
-                }.buttonStyle(.borderedProminent).disabled(!editor.canSave || player == nil || pendingSelection)
+                }.buttonStyle(.borderedProminent).foregroundStyle(Theme.accentInk).disabled(!editor.canSave || player == nil || pendingSelection)
                     .accessibilityIdentifier("Spy.SavedVideo.Save")
             }
         }.disabled(model.previewBusy)

@@ -19,7 +19,7 @@ struct DiagnosticsView: View {
                 if controller.running {
                     Button("Отменить") { controller.cancel() }
                 } else {
-                    Button("Проверить", action: onRun).buttonStyle(.borderedProminent).tint(Theme.accent)
+                    Button("Проверить", action: onRun).buttonStyle(.borderedProminent).foregroundStyle(Theme.accentInk).tint(Theme.accent)
                 }
             }
             if controller.running {
