@@ -77,7 +77,7 @@ extension AppModel {
     }
 
     var canRefreshBufferPreview: Bool {
-        bufferPreview != nil && bufferPreview?.recoveryOrigin == nil && recording && !busy && !saving && !shuttingDown &&
+        bufferPreview != nil && bufferPreview?.recoveryOrigin == nil && recording && !busy && !previewBusy && !shuttingDown &&
             !privacyPaused && !manualPrivacyPause && !privacy.isBlocked && minutes > 0 &&
             stats.frameCount > 0 && libraryAvailable
     }
@@ -200,7 +200,7 @@ extension AppModel {
     }
 
     func closeBufferPreview() {
-        guard !saving, let preview = bufferPreview else { return }
+        guard !previewBusy, let preview = bufferPreview else { return }
         bufferPreview = nil
         do { try FileManager.default.removeItem(at: preview.directory) }
         catch { journal.record(.warning, "Очистка просмотра", describeError(error)) }
@@ -218,6 +218,7 @@ struct BufferPreviewSheet: View {
     @State private var observation: NSKeyValueObservation?
     @State private var playbackError: String?
     @State private var saveError: String?
+    @State private var queuedID: UUID?
     @State private var start: Double = 0
     @State private var end: Double
     private var momentMarkers: [ClipMarker] { model.bufferPreview?.id == preview.id ? model.bufferPreview!.momentMarkers : preview.momentMarkers }
@@ -231,18 +232,19 @@ struct BufferPreviewSheet: View {
     private var range: PreviewRange? { try? PreviewRange(start: start, end: end, duration: duration) }
     private var entireBuffer: Bool { range == (try? PreviewRange(start: 0, end: duration, duration: duration)) }
     private var savedURL: URL? {
+        if let saved = model.exportQueue.saved(sourceKey: preview.id.uuidString, range: range, microphone: microphoneEnabled, gains: audioLevels) { return saved }
         guard model.bufferPreview?.audioGains == AudioLevels(), let range, let url = (microphoneEnabled ? model.bufferPreview?.savedRanges : model.bufferPreview?.mutedSavedRanges)?[range],
               FileManager.default.fileExists(atPath: url.path) else { return nil }
         return url
     }
+    private var audioLevels: AudioLevels { audioControls?.gains ?? preview.audioGains }
+    private var pendingSelection: Bool { model.exportQueue.pending(sourceKey: preview.id.uuidString, range: range, microphone: microphoneEnabled, gains: audioLevels) }
+    private var queuedItem: ExportQueueItem? { queuedID.flatMap { model.exportQueue.item($0) } }
     var body: some View {
         PreviewWorkspace(player: player, title: "Просмотр буфера", fullScreenID: "Spy.BufferPreview.FullScreen",
-                         editor: editor, audioControls: audioControls, busy: model.saving,
-                         header: { previewHeader }, filmstrip: {
-            TimelineThumbnailStrip(asset: preview.asset, assetID: preview.id.uuidString, duration: duration,
-                                   selectionStart: start, selectionEnd: end, onSeek: seek)
-            MomentMarkerStrip(markers: momentMarkers, onSeek: seek)
-        }, footer: { previewFooter })
+                         sourceID: preview.id.uuidString, editor: editor, queue: model.exportQueue,
+                         audioControls: audioControls, busy: model.previewBusy,
+                         header: { previewHeader }, footer: { previewFooter })
         .task(id: preview.id) {
             releasePlayer()
             start = 0; end = preview.clip.duration
@@ -258,14 +260,16 @@ struct BufferPreviewSheet: View {
                 guard model.bufferPreview?.id == previewID else { return }
                 sound.microphoneEnabled = microphoneEnabled
                 sound.systemGain = Double(preview.audioGains.system); sound.microphoneGain = Double(preview.audioGains.microphone)
-                sound.onGainsChanged = { [weak sound, weak model] in
+                sound.onGainsChanged = { [weak sound, weak model, weak editor] in
                     guard let sound, let model, model.bufferPreview?.id == previewID else { return }
                     model.bufferPreview?.audioGains = sound.gains
+                    editor?.checkpoint()
                 }
                 audioControls = sound; item = sound.item
                 player = AVPlayer(playerItem: item)
                 if model.previewMode { player?.isMuted = true }
-                editor.configure(player: player, duration: preview.clip.duration, audioControls: sound,
+                let remembered = preview.recoveryOrigin.flatMap { model.metadata.get($0).playback?.validated(bytes: preview.clip.bytes, duration: preview.clip.duration) }
+                editor.configure(player: player, duration: preview.clip.duration, audioControls: sound, exportQueue: model.exportQueue,
                     rangeStart: start, rangeEnd: end, markers: momentMarkers,
                     onRangeChanged: { first, last in start = first; end = last; saveError = nil },
                     onMicrophoneChanged: { microphoneEnabled = $0 },
@@ -273,9 +277,13 @@ struct BufferPreviewSheet: View {
                         model.addBufferPreviewMarker(previewID, at: time)
                         editor.setMarkers(model.bufferPreview?.momentMarkers ?? [])
                     },
+                    bookmark: remembered,
+                    onCheckpoint: { value in
+                        if let origin = preview.recoveryOrigin { model.rememberPlayback(value, for: origin, bytes: preview.clip.bytes, duration: preview.clip.duration) }
+                    },
                     onSave: { first, last, microphone in
-                        let url = try await model.saveBufferPreview(preview, start: first, end: last, microphoneEnabled: microphone)
-                        return "Сохранено · " + url.lastPathComponent
+                        let id = try enqueue(first: first, last: last, microphone: microphone)
+                        return model.exportQueue.item(id)?.phase == .completed ? "Фрагмент уже сохранён" : "Фрагмент добавлен в очередь"
                     })
                 observation = item.observe(\.status, options: [.initial, .new]) { item, _ in
                     guard item.status == .failed, let error = item.error else { return }
@@ -285,7 +293,7 @@ struct BufferPreviewSheet: View {
                         model.journal.record(.error, "Воспроизведение буфера", describeError(error))
                     }
                 }
-                if preview.recoveryOrigin == nil { player?.play() }
+                if preview.recoveryOrigin == nil && remembered == nil { player?.play() }
             } catch {
                 if !Task.isCancelled {
                     playbackError = error.localizedDescription
@@ -308,6 +316,7 @@ struct BufferPreviewSheet: View {
 
     private var previewHeader: some View {
         HStack(spacing: 12) {
+            SpyMark().fill(Theme.accent).frame(width: 16, height: 25)
             VStack(alignment: .leading, spacing: 4) {
                 Text(preview.recoveryOrigin == nil ? "Предпросмотр буфера" : "Просмотр восстановления")
                     .font(.system(size: 15, weight: .semibold)).lineLimit(1)
@@ -332,10 +341,10 @@ struct BufferPreviewSheet: View {
     private var previewFooter: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let playbackError { Text(playbackError).foregroundStyle(Theme.danger).font(.system(size: 11)).textSelection(.enabled) }
-            if let saveError { Text(saveError).foregroundStyle(Theme.danger).font(.system(size: 11)).textSelection(.enabled) }
+            if let issue = saveError ?? queuedItem?.error { Text(issue).foregroundStyle(Theme.danger).font(.system(size: 11)).textSelection(.enabled) }
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(savedURL != nil ? "Сохранено в библиотеку" : "Ещё не сохранено")
+                    Text(pendingSelection ? (queuedItem?.status ?? "В очереди") : savedURL != nil ? "Сохранено в библиотеку" : "Ещё не сохранено")
                         .font(.system(size: 12, weight: .medium)).foregroundStyle(savedURL == nil ? Color.white : Theme.green)
                     Text(preview.recoveryOrigin != nil ? "Исходные сегменты восстановления сохраняются." :
                          model.recording ? "Повтор продолжает запись. Здесь — зафиксированный снимок." : "Запись остановлена. Сохраните нужный фрагмент.")
@@ -343,24 +352,23 @@ struct BufferPreviewSheet: View {
                 }
                 Spacer(minLength: 8)
                 Button("Закрыть") { player?.pause(); model.closeBufferPreview() }
-                    .keyboardShortcut(.cancelAction).disabled(model.saving)
+                    .keyboardShortcut(.cancelAction).disabled(model.previewBusy)
                 Button {
                     saveError = nil
-                    let selectedStart = start, selectedEnd = end
-                    Task {
-                        do { try await model.saveBufferPreview(preview, start: selectedStart, end: selectedEnd, microphoneEnabled: microphoneEnabled) }
-                        catch { saveError = error.localizedDescription }
-                    }
+                    do { _ = try enqueue(first: start, last: end, microphone: microphoneEnabled) }
+                    catch { saveError = error.localizedDescription }
                 } label: {
-                    HStack(spacing: 6) {
-                        if model.saving { ProgressView().controlSize(.small) }
-                        Image(systemName: savedURL == nil ? "square.and.arrow.down" : "checkmark")
-                        Text(savedURL != nil ? "Сохранено" : model.preparingBufferPreview ? "Обновляю…" : model.saving ? "Сохраняется…" : entireBuffer ? "Сохранить видео" : "Сохранить фрагмент")
-                    }
-                }.buttonStyle(.borderedProminent).disabled(model.saving || !editor.canSave || savedURL != nil || range == nil)
+                    Label(pendingSelection ? "В очереди" : savedURL != nil ? "Сохранено" : entireBuffer ? "Сохранить видео" : "Сохранить фрагмент",
+                          systemImage: savedURL == nil ? "square.and.arrow.down" : "checkmark")
+                }.buttonStyle(.borderedProminent).disabled(model.previewBusy || !editor.canSave || pendingSelection || savedURL != nil || range == nil)
                     .accessibilityIdentifier("Spy.BufferPreview.Save")
             }.buttonStyle(.bordered)
         }
+    }
+    @discardableResult private func enqueue(first: Double, last: Double, microphone: Bool) throws -> UUID {
+        let id = try model.enqueuePreview(preview, start: first, end: last, microphone: microphone, gains: audioLevels)
+        queuedID = id; editor.checkpoint()
+        return id
     }
     private func seek(_ seconds: Double) {
         editor.seek(seconds)

@@ -61,6 +61,7 @@ struct SpyApp: App {
                 Divider()
                 Button("Проверить обновления Spy…") { model.section = 2; Task { await model.updates.check() } }
                 Button("Открыть папку видео") { model.openFolder() }
+                Button("Очередь сохранения…") { model.showExportQueue() }
             }
         }
         MenuBarExtra {
@@ -122,6 +123,7 @@ struct SpyMenu: View {
         Button(model.privacyPaused ? "Продолжить запись" : "Пауза записи") { model.togglePrivacyPause() }.disabled(!model.recording || model.busy)
         Toggle("Индикатор поверх игры", isOn: $model.hudEnabled)
         Button("Папка с видео") { model.openFolder() }
+        Button("Очередь сохранения · \(model.queuedExports)") { model.showExportQueue() }
         Divider()
         Button("Завершить Spy") { NSApp.terminate(nil) }
     }
@@ -237,7 +239,7 @@ struct ContentView: View {
                     Text("\(fileSize(model.freeSpace)) свободно").font(.system(size: 11)).foregroundStyle(Theme.muted)
                 }
             }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(Theme.panel, in: RoundedRectangle(cornerRadius: 14))
-            Text("SPY FOR MAC  /  1.13.1").font(.system(size: 9, weight: .medium)).tracking(1.4).foregroundStyle(Theme.muted.opacity(0.6)).padding(.top, 20).padding(.bottom, 24)
+            Text("SPY FOR MAC  /  1.14.0").font(.system(size: 9, weight: .medium)).tracking(1.4).foregroundStyle(Theme.muted.opacity(0.6)).padding(.top, 20).padding(.bottom, 24)
         }.padding(.horizontal, 16).frame(width: 210).background(Theme.sidebar)
             .overlay(alignment: .trailing) { Rectangle().fill(Theme.border).frame(width: 1) }
     }

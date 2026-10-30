@@ -103,7 +103,23 @@ final class AppModel: ObservableObject {
     @Published var busy = false { didSet { automationRuntimeChanged(); if !busy { flushCaptureFailure(); if pendingPrivacyUpdate { Task { await reconcilePrivacyState() } } } } }
     @Published var manualSaving = false { didSet { automationRuntimeChanged() } }
     @Published var autoClipExports = 0 { didSet { automationRuntimeChanged() } }
-    var saving: Bool { get { manualSaving || autoClipExports > 0 } set { manualSaving = newValue } }
+    @Published var queuedExports = 0 { didSet { automationRuntimeChanged() } }
+    var previewBusy: Bool { manualSaving || autoClipExports > 0 }
+    var saving: Bool { get { previewBusy || queuedExports > 0 } set { manualSaving = newValue } }
+    lazy var exportQueue = ExportQueueController(pendingChanged: { [weak self] count in
+        guard let self else { return }; self.queuedExports = count
+        if count == 0 {
+            self.refreshRecoveryFolders()
+            Task { await self.reconcilePendingChanges() }
+        }
+    }, canStart: { [weak self] in self?.previewBusy == false }, diagnostic: { [weak self] text, failed in
+        guard let self else { return }
+        self.journal.record(failed ? .error : .info, "Очередь сохранения", text)
+        if failed {
+            self.message = "Не удалось сохранить фрагмент. Подробности — в очереди и журнале."
+            if self.notificationsEnabled && !self.previewMode { self.toast.show(title: "Ошибка сохранения", detail: "Подробности — в очереди и журнале.", displayID: self.displayID) }
+        }
+    })
     @Published var diagnosticsBusy = false { didSet { automationRuntimeChanged() } }
     var automationInstalled = false
     var sessionRestorationFinished = false
@@ -129,6 +145,7 @@ final class AppModel: ObservableObject {
     @Published var microphoneCleanup = false { didSet { preferences.set(microphoneCleanup, forKey: "microphoneCleanup") } }
     let bufferViewer = VideoViewerWindow()
     let savedViewer = VideoViewerWindow()
+    let queueViewer = VideoViewerWindow()
     @Published var bufferPreview: BufferPreview? { didSet {
         if oldValue?.id != bufferPreview?.id { presentBufferViewer() }
     } }
@@ -273,7 +290,7 @@ final class AppModel: ObservableObject {
         refreshDisplays()
         refreshMicrophones()
         if preview { return }
-        journal.record(.info, "Запуск", "Spy 1.13.1 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
+        journal.record(.info, "Запуск", "Spy 1.14.0 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
         if let issue = metadata.loadError { journal.record(.error, "Данные библиотеки", "Автоочистка приостановлена для защиты избранного.\n" + metadata.url.path + "\n" + issue) }
         hotkeys = HotKeys(bindings: shortcuts) { [weak self] id in
             Task { @MainActor in
@@ -359,7 +376,7 @@ final class AppModel: ObservableObject {
         return minutes.truncatingRemainder(dividingBy: 1) == 0 ? "\(Int(minutes)) мин" : "\(Int(minutes)) мин 30 сек"
     }
     var canSave: Bool { recording && !saving && !busy && !shuttingDown && stats.frameCount > 0 && minutes > 0 }
-    var canPreviewBuffer: Bool { canSave && bufferPreview == nil }
+    var canPreviewBuffer: Bool { recording && !previewBusy && !busy && !shuttingDown && stats.frameCount > 0 && minutes > 0 && bufferPreview == nil }
 
     var selectedDisplay: DisplayChoice? {
         guard let match = DisplaySelection.resolve(id: displayID, uuid: preferences.string(forKey: "displayUUID"), choices: displays),
@@ -525,6 +542,7 @@ final class AppModel: ObservableObject {
         await flushAutoMoments()
         closeBufferPreview()
         selectedClip = nil
+        queueViewer.dismiss()
         var replay: SpySnapshot?
         if (saveBufferOnExit || updates.pendingInstall) && lastReplayEnabled && recording && minutes > 0 && engine.testStats().frameCount > 0 {
             do {

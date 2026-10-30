@@ -200,7 +200,7 @@ enum SpyUpdateInstaller {
             if let data = try? Data(contentsOf: file), data.count <= 16_384 { status = String(data: data, encoding: .utf8) }
         }
     }
-    static var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.13.1" }
+    static var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.14.0" }
     var hasUpdate: Bool { release.map { (try? SpyVersion($0.tag_name) > SpyVersion(Self.currentVersion)) == true } ?? false }
     func check() async {
         guard !working else { return }; working = true; defer { working = false }

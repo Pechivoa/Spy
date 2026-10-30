@@ -68,10 +68,13 @@ enum MixedAudioExporter {
             }
             if reader.status == .failed { throw reader.error ?? SpyError.message("Не удалось полностью прочитать запись.") }
             writer.endSession(atSourceTime: duration); await writer.finishWriting()
+            try Task.checkCancellation()
             guard writer.status == .completed else { throw writer.error ?? SpyError.message("Сохранение видео не завершено.") }
             progress(1)
         } catch {
-            reader.cancelReading(); writer.cancelWriting(); try? FileManager.default.removeItem(at: destination); throw error
+            if reader.status == .reading { reader.cancelReading() }
+            if writer.status == .writing { writer.cancelWriting() }
+            try? FileManager.default.removeItem(at: destination); throw error
         }
     }
 }

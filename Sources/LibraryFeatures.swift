@@ -11,7 +11,8 @@ struct ClipMetadata: Codable, Equatable {
     var name = ""
     var favorite = false
     var markers: [ClipMarker] = []
-    enum CodingKeys: String, CodingKey { case name, favorite, markers }
+    var playback: PlaybackBookmark? = nil
+    enum CodingKeys: String, CodingKey { case name, favorite, markers, playback }
     init(name: String = "", favorite: Bool = false, markers: [ClipMarker] = []) {
         self.name = name; self.favorite = favorite; self.markers = markers
     }
@@ -20,6 +21,7 @@ struct ClipMetadata: Codable, Equatable {
         name = try values.decodeIfPresent(String.self, forKey: .name) ?? ""
         favorite = try values.decodeIfPresent(Bool.self, forKey: .favorite) ?? false
         markers = try values.decodeIfPresent([ClipMarker].self, forKey: .markers) ?? []
+        playback = try? values.decodeIfPresent(PlaybackBookmark.self, forKey: .playback)
     }
 }
 

@@ -24,9 +24,10 @@ enum TimelineThumbnailGenerator {
         try await generate(asset: AVURLAsset(url: url), duration: duration, count: count)
     }
 
-    static func generate(asset: AVAsset, duration: Double, count: Int = 8) async throws -> [TimelineThumbnail] {
+    static func generate(asset: AVAsset, duration: Double, count: Int = 8, start: Double = 0, end: Double? = nil) async throws -> [TimelineThumbnail] {
         try Task.checkCancellation()
-        let times = sampleTimes(duration: duration, count: count)
+        let first = max(0, min(start, duration)), last = min(duration, end ?? duration)
+        let times = sampleTimes(duration: max(0, last - first), count: count).map { $0 + first }
         guard !times.isEmpty else { return [] }
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true

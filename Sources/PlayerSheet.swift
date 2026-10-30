@@ -16,21 +16,21 @@ struct PlayerSheet: View {
     @State private var end: Double = 0
     @State private var result: URL?
     @State private var trimError: String?
+    @State private var queuedID: UUID?
     private var current: Clip { model.clips.first(where: { $0.id == clip.id }) ?? clip }
     private var audioLevels: AudioLevels { audioControls?.gains ?? AudioLevels() }
     private var momentMarkers: [ClipMarker] { model.metadata.get(current.url).markers }
+    private var selection: PreviewRange? { try? PreviewRange(start: start, end: end, duration: clip.duration) }
+    private var pendingSelection: Bool { model.exportQueue.pending(sourceKey: clip.url.path, range: selection, microphone: microphoneEnabled, gains: audioLevels) }
+    private var queuedItem: ExportQueueItem? { queuedID.flatMap { model.exportQueue.item($0) } }
     var body: some View {
         PreviewWorkspace(player: player, title: current.title, fullScreenID: "Spy.SavedVideo.FullScreen",
-                         editor: editor, audioControls: audioControls, busy: model.saving,
+                         sourceID: clip.url.path, editor: editor, queue: model.exportQueue,
+                         audioControls: audioControls, busy: model.previewBusy,
                          saveMutedCopy: {
-            player?.pause(); result = nil; trimError = nil
-            Task {
-                do { result = try await model.trimClip(clip, start: 0, end: clip.duration, microphoneEnabled: false, levels: audioLevels) }
-                catch { trimError = error.localizedDescription }
-            }
-        }, header: { playerHeader }, filmstrip: {
-            MomentMarkerStrip(markers: momentMarkers, onSeek: seek)
-        }, footer: { playerFooter })
+            do { _ = try enqueue(first: 0, last: clip.duration, microphone: false) }
+            catch { trimError = error.localizedDescription }
+        }, header: { playerHeader }, footer: { playerFooter })
             .task(id: clip.url) {
                 end = clip.duration
                 let item: AVPlayerItem
@@ -48,7 +48,9 @@ struct PlayerSheet: View {
                         model.journal.record(.error, "Воспроизведение видео", clip.url.lastPathComponent + "\n" + describeError(error))
                     }
                 }
-                editor.configure(player: player, duration: clip.duration, audioControls: audioControls,
+                let remembered = model.metadata.get(clip.url).playback?.validated(bytes: clip.bytes, duration: clip.duration)
+                audioControls?.onGainsChanged = { [weak editor] in editor?.checkpoint() }
+                editor.configure(player: player, duration: clip.duration, audioControls: audioControls, exportQueue: model.exportQueue,
                     rangeStart: start, rangeEnd: end, markers: momentMarkers,
                     onRangeChanged: { first, last in start = first; end = last; trimError = nil },
                     onMicrophoneChanged: { microphoneEnabled = $0 },
@@ -56,12 +58,13 @@ struct PlayerSheet: View {
                         model.addPlaybackMarker(current, at: time)
                         editor.setMarkers(model.metadata.get(current.url).markers)
                     },
+                    bookmark: remembered,
+                    onCheckpoint: { value in model.rememberPlayback(value, for: clip.url, bytes: clip.bytes, duration: clip.duration) },
                     onSave: { first, last, microphone in
-                        let url = try await model.trimClip(clip, start: first, end: last, microphoneEnabled: microphone, levels: audioLevels)
-                        result = url
-                        return "Сохранено · " + url.lastPathComponent
+                        _ = try enqueue(first: first, last: last, microphone: microphone)
+                        return "Фрагмент добавлен в очередь"
                     })
-                player?.play()
+                if remembered == nil { player?.play() }
             }
             .onChange(of: start) { _, _ in editor.setRange(start: start, end: end) }
             .onChange(of: end) { _, _ in editor.setRange(start: start, end: end) }
@@ -77,6 +80,7 @@ struct PlayerSheet: View {
     }
     private var playerHeader: some View {
         HStack(spacing: 10) {
+            SpyMark().fill(Theme.accent).frame(width: 16, height: 25)
             VStack(alignment: .leading, spacing: 4) {
                 Text(current.title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
                 Text("\(frameClock(clip.duration)) · \(fileSize(clip.bytes))").font(.system(size: 10)).foregroundStyle(Theme.muted)
@@ -95,25 +99,29 @@ struct PlayerSheet: View {
     private var playerFooter: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let playbackError { Text(playbackError).font(.system(size: 11)).foregroundStyle(Theme.danger).textSelection(.enabled) }
-            if let trimError { Text(trimError).font(.system(size: 11)).foregroundStyle(Theme.accent) }
+            if let issue = trimError ?? queuedItem?.error { Text(issue).font(.system(size: 11)).foregroundStyle(Theme.accent) }
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                if let result {
+                if let result = queuedItem?.result ?? result {
                     Label("Копия добавлена в библиотеку", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.green).font(.system(size: 11))
                     Button("Показать") { NSWorkspace.shared.activateFileViewerSelecting([result]) }.buttonStyle(.plain).font(.system(size: 11))
+                } else if let item = queuedItem, item.pending { Text(item.status).font(.system(size: 11)).foregroundStyle(Theme.accent)
                 } else { Text("Сохранится отдельный ролик. Исходное видео останется в библиотеке.").font(.system(size: 11)).foregroundStyle(Theme.muted) }
                 }.lineLimit(2).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
                 Button("Закрыть") { model.selectedClip = nil }.buttonStyle(.bordered).keyboardShortcut(.cancelAction)
-                Button(model.saving ? "Сохраняется…" : "Сохранить фрагмент") {
-                    player?.pause(); result = nil; trimError = nil
-                    Task {
-                        do { result = try await model.trimClip(clip, start: start, end: end, microphoneEnabled: microphoneEnabled, levels: audioLevels) }
-                        catch { trimError = error.localizedDescription }
-                    }
-                }.buttonStyle(.borderedProminent).disabled(!editor.canSave || player == nil)
+                Button(pendingSelection ? "В очереди" : "Сохранить фрагмент") {
+                    result = nil; trimError = nil
+                    do { _ = try enqueue(first: start, last: end, microphone: microphoneEnabled) }
+                    catch { trimError = error.localizedDescription }
+                }.buttonStyle(.borderedProminent).disabled(!editor.canSave || player == nil || pendingSelection)
                     .accessibilityIdentifier("Spy.SavedVideo.Save")
             }
-        }.disabled(model.saving)
+        }.disabled(model.previewBusy)
+    }
+    @discardableResult private func enqueue(first: Double, last: Double, microphone: Bool) throws -> UUID {
+        let id = try model.enqueueClip(current, start: first, end: last, microphone: microphone, gains: audioLevels)
+        queuedID = id; editor.checkpoint()
+        return id
     }
     private func seek(_ seconds: Double) { editor.seek(seconds) }
 }

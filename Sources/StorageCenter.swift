@@ -10,9 +10,9 @@ func detailedFileSize(_ bytes: Int64) -> String {
 }
 
 enum SpyCacheKind: String, CaseIterable {
-    case live, preview, recovery, updates, other
+    case live, preview, queued, recovery, updates, other
     var title: String {
-        switch self { case .live: return "Текущий буфер"; case .preview: return "Временные просмотры"; case .recovery: return "Записи для восстановления"; case .updates: return "Резервные копии обновлений"; case .other: return "Другие служебные данные" }
+        switch self { case .live: return "Текущий буфер"; case .preview: return "Временные просмотры"; case .queued: return "Очередь сохранения"; case .recovery: return "Записи для восстановления"; case .updates: return "Резервные копии обновлений"; case .other: return "Другие служебные данные" }
     }
 }
 struct SpyCacheEntry: Identifiable {
@@ -29,6 +29,7 @@ enum SpyCacheInventory {
         if update { return .updates }
         if name.hasPrefix("replay-") { return .live }
         if name.hasPrefix("preview-") || name.hasPrefix("save-") { return .preview }
+        if name.hasPrefix("queue-") { return .queued }
         if name.hasPrefix("record-") || name.hasPrefix("recovery-retained-") { return .recovery }
         return .other
     }

@@ -18,6 +18,7 @@ final class BufferPlayback {
     // Keep every referenced source alive through playback and confirmed export.
     private let sourceAssets: [AVURLAsset]
     private let levels: AudioLevels
+    var sourceLevels: AudioLevels { levels }
     private let videoID: CMPersistentTrackID
     private let audioIDs: [AudioSource: CMPersistentTrackID]
 
@@ -139,7 +140,7 @@ final class BufferPlayback {
 
     /// Export only after confirmation, from the same immutable edit list and
     /// frozen source gains used for playback. H.264 packets pass through intact.
-    func export(range: PreviewRange, to destination: URL, separateAudio: Bool, editableMicrophone: Bool = false, microphoneEnabled: Bool = true, gains: AudioLevels = AudioLevels()) async throws {
+    func export(range: PreviewRange, to destination: URL, separateAudio: Bool, editableMicrophone: Bool = false, microphoneEnabled: Bool = true, gains: AudioLevels = AudioLevels(), progress: @escaping (Float) -> Void = { _ in }) async throws {
         guard let sourceVideo = try await asset.loadTracks(withMediaType: .video).first else { throw SpyError.message("Нет видеодорожки.") }
         let composition = AVMutableComposition()
         guard let video = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw SpyError.message("Не удалось сохранить видео.") }
@@ -159,12 +160,12 @@ final class BufferPlayback {
             audio.append(target); volumes[target.trackID] = levels[kind] * gains[kind]; names[target.trackID] = kind.rawValue
         }
         if !audio.isEmpty {
-            try await MixedAudioExporter.export(composition, video: video, audio: audio, to: destination, volumes: volumes, separate: separateAudio || (editableMicrophone && names.values.contains(AudioSource.microphone.rawValue)), names: names, progress: { _ in })
+            try await MixedAudioExporter.export(composition, video: video, audio: audio, to: destination, volumes: volumes, separate: separateAudio || (editableMicrophone && names.values.contains(AudioSource.microphone.rawValue)), names: names, progress: progress)
         } else {
             guard let exporter = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else { throw SpyError.message("Экспорт видео недоступен.") }
             exporter.outputURL = destination; exporter.outputFileType = .mov; exporter.shouldOptimizeForNetworkUse = true
-            await exporter.export()
-            guard exporter.status == .completed else { try? FileManager.default.removeItem(at: destination); throw exporter.error ?? SpyError.message("Не удалось сохранить видео.") }
+            do { try await AssetExportOperation.run(exporter, progress: progress) }
+            catch { try? FileManager.default.removeItem(at: destination); throw error }
         }
     }
 }

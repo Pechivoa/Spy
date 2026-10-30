@@ -47,7 +47,7 @@ final class EditableVideoAudio {
     }
 
     func export(to destination: URL, start: Double = 0, end: Double? = nil,
-                microphoneEnabled: Bool = true, levels: AudioLevels = AudioLevels(), fileType: AVFileType = .mov) async throws {
+                microphoneEnabled: Bool = true, levels: AudioLevels = AudioLevels(), fileType: AVFileType = .mov, progress: @escaping (Float) -> Void = { _ in }) async throws {
         let duration = try await asset.load(.duration).seconds
         let range = try PreviewRange(start: start, end: end ?? duration, duration: duration)
         let selected = CMTimeRange(start: CMTime(seconds: range.start, preferredTimescale: 60_000),
@@ -68,12 +68,12 @@ final class EditableVideoAudio {
         }
         if !selectedAudio.isEmpty {
             try await MixedAudioExporter.export(composition, video: targetVideo, audio: selectedAudio, to: destination,
-                volumes: selectedVolumes, separate: fileType == .mov, names: selectedNames, fileType: fileType, progress: { _ in })
+                volumes: selectedVolumes, separate: fileType == .mov, names: selectedNames, fileType: fileType, progress: progress)
         } else {
             guard let exporter = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else { throw SpyError.message("Экспорт видео недоступен.") }
             exporter.outputURL = destination; exporter.outputFileType = fileType
-            await exporter.export()
-            guard exporter.status == .completed else { try? FileManager.default.removeItem(at: destination); throw exporter.error ?? SpyError.message("Не удалось сохранить видео.") }
+            do { try await AssetExportOperation.run(exporter, progress: progress) }
+            catch { try? FileManager.default.removeItem(at: destination); throw error }
         }
     }
 }

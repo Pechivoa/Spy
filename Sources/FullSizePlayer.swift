@@ -43,6 +43,7 @@ struct FullSizePlayer: NSViewRepresentable {
         playerView.controlsStyle = .floating
         playerView.videoGravity = .resizeAspect
         playerView.showsFullScreenToggleButton = false
+        playerView.allowsVideoFrameAnalysis = false
         playerView.player = player
         expandButton.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: "На весь экран")
         expandButton.title = "На весь экран"
@@ -249,7 +250,7 @@ struct FullSizePlayer: NSViewRepresentable {
                 } ?? false
                 guard !self.chromePinned, self.host?.playerView.player?.rate ?? 0 > 0, !pointerOverControls else { return }
                 if self.host?.editor?.isSaving == true || self.host?.editor?.isStepping == true ||
-                    self.host?.editor?.isSeeking == true || NSEvent.pressedMouseButtons != 0 {
+                    self.host?.editor?.isSeeking == true || self.host?.editor?.isInspecting == true || NSEvent.pressedMouseButtons != 0 {
                     // Finishing a seek or releasing a held mouse button must
                     // not permanently consume the only scheduled idle check.
                     do { try await Task.sleep(nanoseconds: 200_000_000) } catch { return }

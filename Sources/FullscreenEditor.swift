@@ -21,6 +21,72 @@ import Combine
     @Published private(set) var saveError: String?
     @Published private(set) var markers: [ClipMarker] = []
     @Published private(set) var audioControls: VideoAudioControls?
+    nonisolated static let supportedRates: [Float] = [0.25, 0.5, 1, 1.5, 2]
+    @Published private(set) var playbackRate: Float = 1
+    @Published private(set) var exportQueue: ExportQueueController?
+    @Published private(set) var isInspecting = false
+    func setInspectionOpen(_ value: Bool) {
+        guard isInspecting != value else { return }
+        isInspecting = value; host?.presentation.noteInteraction()
+    }
+    private var onCheckpoint: ((PlaybackBookmark) -> Void)?
+    private var lastCheckpoint = Date.distantPast
+    private var checkpointTask: Task<Void, Never>?
+    private var keyMonitor: Any?
+    private var consumedKeys: Set<UInt16> = []
+
+    func bookmark() -> PlaybackBookmark {
+        PlaybackBookmark(position: currentTime, start: rangeStart, end: rangeEnd, rate: playbackRate,
+            microphone: microphoneEnabled, systemGain: audioControls?.systemGain ?? 1,
+            microphoneGain: audioControls?.microphoneGain ?? 1, looping: isLooping)
+    }
+    func checkpoint(force: Bool = false) {
+        guard duration > 0, onCheckpoint != nil else { return }
+        let elapsed = Date().timeIntervalSince(lastCheckpoint)
+        if !force && elapsed < 2 {
+            if checkpointTask == nil {
+                checkpointTask = Task { [weak self] in
+                    do { try await Task.sleep(nanoseconds: UInt64(max(0.001, 2 - elapsed) * 1_000_000_000)) }
+                    catch { return }
+                    self?.checkpoint(force: true)
+                }
+            }
+            return
+        }
+        checkpointTask?.cancel(); checkpointTask = nil
+        lastCheckpoint = Date(); onCheckpoint?(bookmark())
+    }
+    func setPlaybackRate(_ value: Float) {
+        guard Self.supportedRates.contains(value) else { return }
+        playbackRate = value
+        player?.defaultRate = value
+        if isPlaying { player?.playImmediately(atRate: value) }
+        checkpoint()
+    }
+    private func installEditingKeys() {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
+            let consumed = MainActor.assumeIsolated { self?.handleEditingKey(event) == true }
+            return consumed ? nil : event
+        }
+    }
+    @discardableResult func handleEditingKey(_ event: NSEvent) -> Bool {
+        guard let host, let window = event.window, window.isKeyWindow,
+              window === host.window || window === host.presentation.panel else { return false }
+        if event.type == .keyUp { return consumedKeys.remove(event.keyCode) != nil }
+        guard !isSaving, duration > 0,
+              event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+              !(window.firstResponder is NSTextView), !(window.firstResponder is NSTextField) else { return false }
+        switch event.keyCode {
+        case 123: stepFrames(event.modifierFlags.contains(.shift) ? -10 : -1)
+        case 124: stepFrames(event.modifierFlags.contains(.shift) ? 10 : 1)
+        case 34: if !event.isARepeat { setStartAtPlayhead() }
+        case 31: if !event.isARepeat { setEndAtPlayhead() }
+        case 49: if !event.isARepeat { togglePlayback() }
+        default: return false
+        }
+        consumedKeys.insert(event.keyCode)
+        return true
+    }
 
     private var player: AVPlayer?
     private weak var host: FullSizePlayerHost?
@@ -43,6 +109,7 @@ import Combine
     private var onMicrophoneChanged: ((Bool) -> Void)?
     private var onAddMarker: ((Double) -> Void)?
     private var onSave: (@MainActor (Double, Double, Bool) async throws -> String)?
+    var asset: AVAsset? { player?.currentItem?.asset }
 
     var canMuteMicrophone: Bool { audioControls?.canMuteMicrophone == true }
     var canAddMarker: Bool { onAddMarker != nil && player != nil && !isSaving }
@@ -55,11 +122,13 @@ import Combine
     }
 
     func configure(player: AVPlayer?, duration: Double, frameRate: Double = 60,
-                   audioControls: VideoAudioControls? = nil, rangeStart: Double = 0,
+                   audioControls: VideoAudioControls? = nil, exportQueue: ExportQueueController? = nil, rangeStart: Double = 0,
                    rangeEnd: Double? = nil, markers: [ClipMarker] = [],
                    onRangeChanged: ((Double, Double) -> Void)? = nil,
                    onMicrophoneChanged: ((Bool) -> Void)? = nil,
                    onAddMarker: ((Double) -> Void)? = nil,
+                   bookmark: PlaybackBookmark? = nil,
+                   onCheckpoint: ((PlaybackBookmark) -> Void)? = nil,
                    onSave: (@MainActor (Double, Double, Bool) async throws -> String)? = nil) {
         detach()
         guard let player, duration.isFinite, duration > 0 else { return }
@@ -67,10 +136,21 @@ import Combine
         self.duration = duration
         self.frameDuration = 1 / (frameRate.isFinite && frameRate > 0 ? frameRate : 60)
         self.audioControls = audioControls
+        self.exportQueue = exportQueue
         self.microphoneEnabled = audioControls?.microphoneEnabled ?? true
         self.onRangeChanged = onRangeChanged; self.onMicrophoneChanged = onMicrophoneChanged
         self.onAddMarker = onAddMarker; self.onSave = onSave
-        setRange(start: rangeStart, end: rangeEnd ?? duration)
+        playbackRate = bookmark?.rate ?? 1
+        player.defaultRate = playbackRate
+        if let bookmark {
+            audioControls?.microphoneEnabled = bookmark.microphone
+            audioControls?.systemGain = bookmark.systemGain; audioControls?.microphoneGain = bookmark.microphoneGain
+            microphoneEnabled = audioControls?.microphoneEnabled ?? bookmark.microphone
+            onMicrophoneChanged?(microphoneEnabled)
+            isLooping = bookmark.looping
+        }
+        setRange(start: bookmark?.start ?? rangeStart, end: bookmark?.end ?? rangeEnd ?? duration)
+        if bookmark != nil { publishRange() }
         setMarkers(markers)
         currentTime = playhead()
         isPlaying = player.rate > 0
@@ -79,6 +159,7 @@ import Combine
             Task { @MainActor in
                 guard let self, self.sessionID == session, time.isNumeric, !self.isSeeking, !self.isStepping else { return }
                 self.currentTime = self.playhead()
+                self.checkpoint(force: false)
             }
         }
         rateObservation = player.observe(\.rate, options: [.initial, .new]) { [weak self] player, _ in
@@ -91,7 +172,7 @@ import Combine
             microphoneObservation = audioControls.$microphoneEnabled.sink { [weak self] enabled in
                 Task { @MainActor in
                     guard let self, self.sessionID == session, self.microphoneEnabled != enabled else { return }
-                    self.microphoneEnabled = enabled; self.onMicrophoneChanged?(enabled)
+                    self.microphoneEnabled = enabled; self.onMicrophoneChanged?(enabled); self.checkpoint()
                 }
             }
         }
@@ -120,9 +201,18 @@ import Combine
         }
         installBoundary()
         refreshFullScreenAvailability()
+        installEditingKeys()
+        if let bookmark { seek(bookmark.position); message = "Продолжено с " + frameClock(bookmark.position) }
+        lastCheckpoint = .distantPast
+        self.onCheckpoint = onCheckpoint
     }
 
     func detach() {
+        checkpoint(force: true)
+        checkpointTask?.cancel(); checkpointTask = nil
+        onCheckpoint = nil
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
+        consumedKeys = []
         host?.presentation.close(returnFocus: false)
         sessionID = UUID(); seekID = UUID(); boundaryID = UUID()
         frameTask?.cancel(); frameTask = nil; stepTask?.cancel(); stepTask = nil
@@ -130,10 +220,10 @@ import Combine
         if let boundaryObservation { player?.removeTimeObserver(boundaryObservation); self.boundaryObservation = nil }
         if let endObservation { NotificationCenter.default.removeObserver(endObservation); self.endObservation = nil }
         rateObservation?.invalidate(); rateObservation = nil; microphoneObservation = nil
-        player = nil; audioControls = nil
+        player = nil; audioControls = nil; exportQueue = nil; isInspecting = false
         onRangeChanged = nil; onMicrophoneChanged = nil; onAddMarker = nil; onSave = nil
         duration = 0; rangeStart = 0; rangeEnd = 0; currentTime = 0
-        isLooping = false; isPlaying = false; isSaving = false
+        isLooping = false; isPlaying = false; isSaving = false; playbackRate = 1
         isSeeking = false; isStepping = false; stepOrigin = nil; pendingStepCount = 0; pendingPlayheadActions = []
         canOpenFullScreen = false; message = nil; saveError = nil; markers = []
     }
@@ -207,16 +297,19 @@ import Combine
         guard canMuteMicrophone, !isSaving else { return }
         audioControls?.microphoneEnabled = value
         if microphoneEnabled != value { microphoneEnabled = value; onMicrophoneChanged?(value) }
+        checkpoint()
     }
     func togglePlayback() {
         guard let player, !isSaving else { return }
         if player.rate > 0 { player.pause(); isPlaying = false }
         else if playhead() >= rangeEnd - 0.000001 || (isLooping && playhead() < rangeStart) { seek(rangeStart, resume: true) }
-        else { player.play(); isPlaying = true }
+        else { player.playImmediately(atRate: playbackRate); isPlaying = true }
+        checkpoint()
     }
     func setLooping(_ value: Bool) {
         guard !isSaving else { return }
         isLooping = value
+        checkpoint()
         installBoundary()
         if value, playhead() < rangeStart || playhead() >= rangeEnd {
             seek(rangeStart, resume: player?.rate ?? 0 > 0)
@@ -238,7 +331,8 @@ import Combine
                 self.isSeeking = false
                 self.currentTime = self.clampTime(player.currentTime().seconds)
                 if done {
-                    if resume { player.play(); self.isPlaying = true }
+                    if resume { player.playImmediately(atRate: self.playbackRate); self.isPlaying = true }
+                    self.checkpoint()
                     self.performPendingPlayheadActions()
                 } else { self.pendingPlayheadActions = [] }
             }
@@ -293,7 +387,7 @@ import Combine
         if abs(seconds - duration) < 0.000001 { return duration }
         return clampTime((seconds / frameDuration).rounded() * frameDuration)
     }
-    private func publishRange() { onRangeChanged?(rangeStart, rangeEnd) }
+    private func publishRange() { onRangeChanged?(rangeStart, rangeEnd); checkpoint() }
     private func performPendingPlayheadActions() {
         let actions = pendingPlayheadActions; pendingPlayheadActions = []
         for action in actions {
@@ -460,6 +554,8 @@ struct FullscreenEditingToolbar: View {
                     Toggle("Микрофон в видео", isOn: Binding(get: { editor.microphoneEnabled }, set: editor.setMicrophoneEnabled)).toggleStyle(.switch)
                 }
                 if editor.canAddMarker { Button { editor.addMarker() } label: { Label("Метка", systemImage: "bookmark") } }
+                PlaybackSpeedPicker(editor: editor)
+                if let queue = editor.exportQueue { ExportQueueButton(queue: queue, inspectionChanged: editor.setInspectionOpen) }
                 Spacer()
                 Button { Task { await editor.saveSelection() } } label: {
                     HStack(spacing: 7) {
@@ -474,7 +570,7 @@ struct FullscreenEditingToolbar: View {
             if let error = editor.saveError {
                 Text(error).font(.system(size: 11)).foregroundStyle(Theme.danger).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
             } else if let message = editor.message {
-                Label(message, systemImage: "checkmark.circle.fill").font(.system(size: 11)).foregroundStyle(Theme.green).frame(maxWidth: .infinity, alignment: .leading)
+                Label(message, systemImage: message.contains("очеред") ? "clock" : "checkmark.circle.fill").font(.system(size: 11)).foregroundStyle(message.contains("очеред") ? Theme.accent : Theme.green).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .font(.system(size: 12)).buttonStyle(.bordered).controlSize(.small)

@@ -15,6 +15,7 @@ import SwiftUI
     }
 
     func present<Content: View>(title: String, frameName: String? = nil, show: Bool = true,
+                               preferredSize: NSSize? = nil, minimumSize: NSSize? = nil,
                                canClose: @escaping () -> Bool = { true },
                                onClose: @escaping () -> Void, @ViewBuilder content: () -> Content) {
         self.canClose = canClose; self.onClose = onClose
@@ -26,7 +27,9 @@ import SwiftUI
         }
         let screen = NSApp.keyWindow?.screen ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
-        let size = Self.contentSize(visible: visible)
+        let available = Self.contentSize(visible: visible)
+        let size = NSSize(width: min(preferredSize?.width ?? available.width, available.width),
+                          height: min(preferredSize?.height ?? available.height, available.height))
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
@@ -37,7 +40,7 @@ import SwiftUI
         window.collectionBehavior = [.fullScreenNone]
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = NSColor(Theme.background)
-        window.contentMinSize = NSSize(width: min(720, size.width), height: min(540, size.height))
+        window.contentMinSize = NSSize(width: min(minimumSize?.width ?? 720, size.width), height: min(minimumSize?.height ?? 540, size.height))
         window.delegate = self
         let host = NSHostingView(rootView: AnyView(content()))
         // Intrinsic SwiftUI size must never turn this into a short sheet or cap
@@ -89,7 +92,7 @@ import SwiftUI
         guard !previewMode else { return }
         guard let preview = bufferPreview else { bufferViewer.dismiss(); return }
         bufferViewer.present(title: preview.recoveryOrigin == nil ? "Spy — Предпросмотр буфера" : "Spy — Восстановление",
-            frameName: "Spy.BufferViewer", canClose: { [weak self] in self?.saving != true },
+            frameName: "Spy.BufferViewer", canClose: { [weak self] in self?.previewBusy != true },
             onClose: { [weak self] in self?.closeBufferPreview() }) {
                 BufferPreviewSheet(preview: preview, model: self).id(preview.id)
             }
@@ -99,7 +102,7 @@ import SwiftUI
         guard !previewMode else { return }
         guard let clip = selectedClip else { savedViewer.dismiss(); return }
         savedViewer.present(title: "Spy — " + clip.title, frameName: "Spy.SavedViewer",
-            canClose: { [weak self] in self?.saving != true },
+            canClose: { [weak self] in self?.previewBusy != true },
             onClose: { [weak self] in self?.selectedClip = nil }) {
                 PlayerSheet(clip: clip, model: self).id(clip.id)
             }
