@@ -10,6 +10,7 @@ import Foundation
         if privacy.isBlocked || manualPrivacyPause { recordingDiagnostics.cancel() }
         automationRuntimeChanged()
         let blocked = privacy.isBlocked || manualPrivacyPause
+        if blocked { soundpad.blockNow("Пауза приватности. Передача звука выключена.") }
         engine.requestPrivacyBlock(blocked)
         pendingPrivacyUpdate = true
         Task { await reconcilePrivacyState() }
@@ -57,6 +58,7 @@ import Foundation
         }
     }
     func refreshPrivacyExclusions() {
+        soundpad.privacyUpdated()
         recordingDiagnostics.cancel()
         let ids = privacy.excludedBundleIDs
         engine.requestPrivacyFilter(ids)

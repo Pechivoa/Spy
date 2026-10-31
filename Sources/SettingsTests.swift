@@ -33,7 +33,7 @@ import Carbon
         var testing = ShortcutBindings()
         testing.save = Shortcut(keyCode: 105, modifiers: UInt32(cmdKey | controlKey | optionKey), keyLabel: "F13")
         testing.toggle = Shortcut(keyCode: 107, modifiers: UInt32(cmdKey | controlKey | optionKey), keyLabel: "F14")
-        for (action, code) in zip(ShortcutAction.quick + [.manual, .preview, .marker], [UInt32(18), 19, 20, 21, 23, 25, 26]) {
+        for (action, code) in zip(ShortcutAction.quick + [.manual, .preview, .marker, .broadcast] + ShortcutAction.pads, [UInt32(18), 19, 20, 21, 23, 25, 26, 28, 29, 0, 1, 2, 3, 4, 5, 6]) {
             testing[action] = Shortcut(keyCode: code, modifiers: UInt32(cmdKey | controlKey | optionKey), keyLabel: Shortcut.keyNames[code]!)
         }
         let legacy = try JSONEncoder().encode(["save": ShortcutBindings.quickDefault(18), "toggle": Shortcut.toggleDefault])
@@ -74,7 +74,7 @@ import Carbon
         try keys.resume()
         try SelfTest.require(keys.registered, "Capture cancellation restores global shortcuts")
         var blocking = ShortcutBindings(save: Shortcut(keyCode: 113, modifiers: UInt32(cmdKey | controlKey | optionKey), keyLabel: "F15"), toggle: Shortcut(keyCode: 106, modifiers: UInt32(cmdKey | controlKey | optionKey), keyLabel: "F16"))
-        for (action, code) in zip(ShortcutAction.quick + [.manual, .preview, .marker], [UInt32(18), 19, 20, 21, 23, 25, 26]) {
+        for (action, code) in zip(ShortcutAction.quick + [.manual, .preview, .marker, .broadcast] + ShortcutAction.pads, [UInt32(18), 19, 20, 21, 23, 25, 26, 28, 29, 0, 1, 2, 3, 4, 5, 6]) {
             blocking[action] = Shortcut(keyCode: code, modifiers: UInt32(cmdKey | controlKey | optionKey | shiftKey), keyLabel: Shortcut.keyNames[code]!)
         }
         let blocker = HotKeys(bindings: blocking) { _ in }

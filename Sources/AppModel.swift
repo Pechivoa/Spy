@@ -47,6 +47,14 @@ final class AppModel: ObservableObject {
     }
     @Published var quality: Quality { didSet { preferences.set(quality.rawValue, forKey: "quality") } }
     @Published var systemAudio: Bool { didSet { preferences.set(systemAudio, forKey: "audio") } }
+    let soundpadWindow = VideoViewerWindow()
+    lazy var soundpad: SoundpadController = {
+        let root = journal.fileURL.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Soundpad", isDirectory: true)
+        let value = SoundpadController(defaults: preferences, root: root, journal: journal, preview: previewMode)
+        value.excludedPrivateIDs = { [weak self] in self?.privacy.excludedBundleIDs ?? [] }
+        value.transmissionBlocked = { [weak self] in self?.privacyPaused == true || self?.manualPrivacyPause == true || self?.privacy.isBlocked == true || self?.privacy.exclusionsReadable == false }
+        return value
+    }()
     let applicationAudio: ApplicationAudioSelection
     let captureTuning: CaptureTuningSettings
     lazy var captureRecovery = CaptureRecovery(defaults: preferences)
@@ -294,7 +302,7 @@ final class AppModel: ObservableObject {
             try configureExportQueue()
             if exportQueue.restoredCount > 0 { message = "Восстановлена очередь: \(exportQueue.restoredCount). Откройте очередь, чтобы продолжить сохранение." }
         } catch { journal.record(.error, "Восстановление очереди", describeError(error)) }
-        journal.record(.info, "Запуск", "Spy 1.16.0 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
+        journal.record(.info, "Запуск", "Spy 1.17.0 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
         if let issue = metadata.loadError { journal.record(.error, "Данные библиотеки", "Автоочистка приостановлена для защиты избранного.\n" + metadata.url.path + "\n" + issue) }
         hotkeys = HotKeys(bindings: shortcuts) { [weak self] id in
             Task { @MainActor in
@@ -305,6 +313,8 @@ final class AppModel: ObservableObject {
                     else if action == .toggle { await self.toggleRecording() }
                     else if action == .preview { await self.openBufferPreview() }
                     else if action == .marker { self.addMomentMarker() }
+                    else if action == .broadcast { await self.soundpad.toggle() }
+                    else if let slot = action.padSlot { await self.soundpad.play(slot: slot) }
                     else { await self.saveSpy(seconds: action.seconds) }
                 }
             }
@@ -539,6 +549,7 @@ final class AppModel: ObservableObject {
         guard !shuttingDown else { return false }
         shuttingDown = true
         captureRecovery.cancel()
+        await soundpad.stop(); soundpadWindow.dismiss()
         if busy && startupStatus != nil { pendingCaptureStop = true }
         recordingDiagnostics.cancel()
         while diagnosticsBusy { try? await Task.sleep(nanoseconds: 50_000_000) }
@@ -694,9 +705,11 @@ final class AppModel: ObservableObject {
         error = text
         journal.record(.error, topic, details ?? text)
     }
-    func beginShortcutEdit(_ action: ShortcutAction) {
+    private var shortcutCaptureActive = false
+    func beginShortcutEdit(_ action: ShortcutAction, external: Bool = false) {
+        shortcutCaptureActive = true
         hotkeys?.suspend()
-        editingShortcut = action
+        if !external { editingShortcut = action }
     }
     func assignShortcut(_ value: Shortcut, to action: ShortcutAction) throws {
         var candidate = shortcuts
@@ -709,12 +722,13 @@ final class AppModel: ObservableObject {
             hotkeyAvailable = previewMode || hotkeys?.registered == true
             journal.record(.info, "Настройка клавиш", action.title + " → " + value.label)
         } catch {
-            if editingShortcut != nil { hotkeys?.suspend() }
+            if shortcutCaptureActive { hotkeys?.suspend() }
             journal.record(.warning, "Настройка клавиш", describeError(error))
             throw error
         }
     }
     func finishShortcutEdit() {
+        shortcutCaptureActive = false
         editingShortcut = nil
         do { try hotkeys?.resume(); hotkeyAvailable = previewMode || hotkeys?.registered == true }
         catch { hotkeyAvailable = false; journal.record(.warning, "Горячие клавиши", describeError(error)) }

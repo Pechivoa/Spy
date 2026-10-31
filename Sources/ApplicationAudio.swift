@@ -19,22 +19,24 @@ enum ApplicationAudioPolicy {
 /// Missing selected apps remain selected; they must never mean "all audio".
 @MainActor final class ApplicationAudioSelection: ObservableObject {
     @Published var mode: ApplicationAudioMode {
-        didSet { defaults.set(mode.rawValue, forKey: "applicationAudioMode") }
+        didSet { defaults.set(mode.rawValue, forKey: prefix + "Mode") }
     }
     @Published private(set) var selectedApplications: [PrivacyApplication]
     @Published private(set) var runningApplications: [PrivacyApplication] = []
     var bundleIDs: Set<String> { CapturePrivacyPolicy.normalizedIDs(selectedApplications.map(\.bundleID)) }
     var onApplicationsChanged: (() -> Void)?
     private let defaults: UserDefaults
+    private let prefix: String
     private var observers: [NSObjectProtocol] = []
     private var refreshTask: Task<Void, Never>?
 
-    init(defaults: UserDefaults) {
+    init(defaults: UserDefaults, prefix: String = "applicationAudio") {
         self.defaults = defaults
-        let rawMode = defaults.string(forKey: "applicationAudioMode")
+        self.prefix = prefix
+        let rawMode = defaults.string(forKey: prefix + "Mode")
         let knownMode = rawMode.flatMap(ApplicationAudioMode.init(rawValue:))
         mode = knownMode ?? (rawMode == nil ? .all : .selected)
-        let saved = (rawMode != nil && knownMode == nil ? nil : defaults.data(forKey: "applicationAudioApplications"))
+        let saved = (rawMode != nil && knownMode == nil ? nil : defaults.data(forKey: prefix + "Applications"))
             .flatMap { try? JSONDecoder().decode([PrivacyApplication].self, from: $0) } ?? []
         var seen = Set<String>()
         selectedApplications = saved.compactMap { app in
@@ -88,7 +90,7 @@ enum ApplicationAudioPolicy {
         selectedApplications.removeAll { $0.bundleID == id }
         if selected { selectedApplications.append(PrivacyApplication(bundleID: id, name: app.name)) }
         selectedApplications.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        if let data = try? JSONEncoder().encode(selectedApplications) { defaults.set(data, forKey: "applicationAudioApplications") }
+        if let data = try? JSONEncoder().encode(selectedApplications) { defaults.set(data, forKey: prefix + "Applications") }
     }
 }
 

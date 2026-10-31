@@ -130,6 +130,7 @@ struct SpyWindowView: View {
             Menu {
                 navigation("Мгновенный повтор", section: 0)
                 navigation("Библиотека", section: 1)
+                Button("Soundpad — звук в микрофон…") { model.showSoundpad() }
                 navigation("Настройки", section: 2)
                 navigation("Профили", section: 4)
                 navigation("Дополнительно", section: 5)

@@ -2,7 +2,7 @@ import AppKit
 import Carbon
 
 enum ShortcutAction: UInt32, Identifiable, CaseIterable {
-    case save = 1, toggle = 2, save30 = 3, save60 = 4, save300 = 5, save600 = 6, manual = 7, preview = 8, marker = 9
+    case save = 1, toggle = 2, save30 = 3, save60 = 4, save300 = 5, save600 = 6, manual = 7, preview = 8, marker = 9, broadcast = 10, pad1 = 11, pad2 = 12, pad3 = 13, pad4 = 14, pad5 = 15, pad6 = 16, pad7 = 17, pad8 = 18
     var id: UInt32 { rawValue }
     var title: String {
         switch self {
@@ -15,11 +15,15 @@ enum ShortcutAction: UInt32, Identifiable, CaseIterable {
         case .manual: return "Начать / завершить ручную запись"
         case .preview: return "Открыть просмотр буфера"
         case .marker: return "Добавить метку момента"
+        case .broadcast: return "Включить / выключить передачу звука"
+        default: return "Soundpad · звук \(Int(rawValue) - 10)"
         }
     }
     var seconds: Double? {
         switch self { case .save30: return 30; case .save60: return 60; case .save300: return 300; case .save600: return 600; default: return nil }
     }
+    static var pads: [ShortcutAction] { [.pad1, .pad2, .pad3, .pad4, .pad5, .pad6, .pad7, .pad8] }
+    var padSlot: Int? { Self.pads.firstIndex(of: self) }
     static var quick: [ShortcutAction] { [.save30, .save60, .save300, .save600] }
     var shortTitle: String { switch self { case .save30: return "30 сек"; case .save60: return "1 мин"; case .save300: return "5 мин"; case .save600: return "10 мин"; default: return title } }
 }
@@ -28,6 +32,8 @@ struct Shortcut: Codable, Equatable {
     let keyCode: UInt32
     let modifiers: UInt32
     let keyLabel: String
+    static let broadcastDefault = Shortcut(keyCode: 11, modifiers: UInt32(cmdKey | optionKey | shiftKey), keyLabel: "B")
+    static let padDefaults: [Shortcut] = [UInt32(18), 19, 20, 21, 23, 22, 26, 28].map { Shortcut(keyCode: $0, modifiers: UInt32(cmdKey | optionKey | shiftKey), keyLabel: keyNames[$0]!) }
     static let saveDefault = Shortcut(keyCode: 1, modifiers: UInt32(cmdKey | optionKey), keyLabel: "S")
     static let toggleDefault = Shortcut(keyCode: 15, modifiers: UInt32(cmdKey | optionKey), keyLabel: "R")
     static let previewDefault = Shortcut(keyCode: 35, modifiers: UInt32(cmdKey | optionKey), keyLabel: "P")
@@ -90,6 +96,8 @@ struct ShortcutBindings: Codable, Equatable {
     var manual: Shortcut
     var preview: Shortcut
     var marker: Shortcut
+    var broadcast: Shortcut = .broadcastDefault
+    var pads: [Shortcut] = Shortcut.padDefaults
     static func quickDefault(_ key: UInt32) -> Shortcut { Shortcut(keyCode: key, modifiers: UInt32(cmdKey | optionKey), keyLabel: Shortcut.keyNames[key] ?? "?") }
     init(save: Shortcut = .saveDefault, toggle: Shortcut = .toggleDefault,
          quick30: Shortcut = quickDefault(18), quick60: Shortcut = quickDefault(19),
@@ -98,7 +106,7 @@ struct ShortcutBindings: Codable, Equatable {
         self.save=save; self.toggle=toggle; self.quick30=quick30; self.quick60=quick60; self.quick300=quick300; self.quick600=quick600; self.manual=manual
         self.preview=preview; self.marker=marker
     }
-    enum CodingKeys: String, CodingKey { case save, toggle, quick30, quick60, quick300, quick600, manual, preview, marker }
+    enum CodingKeys: String, CodingKey { case save, toggle, quick30, quick60, quick300, quick600, manual, preview, marker, broadcast, pads }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(save: try c.decodeIfPresent(Shortcut.self, forKey: .save) ?? .saveDefault,
@@ -110,23 +118,40 @@ struct ShortcutBindings: Codable, Equatable {
                   manual: try c.decodeIfPresent(Shortcut.self, forKey: .manual) ?? Shortcut(keyCode: 9, modifiers: UInt32(cmdKey | optionKey), keyLabel: "V"),
                   preview: try c.decodeIfPresent(Shortcut.self, forKey: .preview) ?? .previewDefault,
                   marker: try c.decodeIfPresent(Shortcut.self, forKey: .marker) ?? .markerDefault)
+        broadcast = try c.decodeIfPresent(Shortcut.self, forKey: .broadcast) ?? .broadcastDefault
+        if let savedPads = try c.decodeIfPresent([Shortcut].self, forKey: .pads), savedPads.count == 8 { pads = savedPads }
         // Preserve older user bindings if they collide with newly added defaults.
-        var seen: [Shortcut] = [save, toggle]
-        for (action, key) in zip(ShortcutAction.quick + [.manual, .preview, .marker], [CodingKeys.quick30, .quick60, .quick300, .quick600, .manual, .preview, .marker]) {
-            if !c.contains(key), seen.contains(where: { $0.sameCombination(as: self[action]) }) {
-                for code: UInt32 in [18,19,20,21,22,23,25,26,28,29] {
-                    let fallback=Shortcut(keyCode: code, modifiers: UInt32(cmdKey | controlKey | optionKey | shiftKey), keyLabel: Shortcut.keyNames[code]!)
-                    if !seen.contains(where: { $0.sameCombination(as: fallback) }) { self[action]=fallback; break }
+        let oldActions: [ShortcutAction] = [.save, .toggle, .save30, .save60, .save300, .save600, .manual, .preview, .marker]
+        let keys: [CodingKeys] = [.save, .toggle, .quick30, .quick60, .quick300, .quick600, .manual, .preview, .marker]
+        var reserved = zip(oldActions, keys).filter { c.contains($0.1) }.map { self[$0.0] }
+        if c.contains(.broadcast) { reserved.append(broadcast) }
+        if c.contains(.pads) { reserved += pads }
+        for action in ShortcutAction.allCases {
+            let supplied: Bool
+            if let index = oldActions.firstIndex(of: action) { supplied = c.contains(keys[index]) }
+            else { supplied = c.contains(action == .broadcast ? .broadcast : .pads) }
+            guard !supplied else { continue }
+            if reserved.contains(where: { $0.sameCombination(as: self[action]) }) {
+                for code: UInt32 in [18,19,20,21,22,23,25,26,28,29,0,1,2,3,4,5,6,7,8,9] {
+                    let fallback = Shortcut(keyCode: code, modifiers: UInt32(cmdKey | controlKey | optionKey | shiftKey), keyLabel: Shortcut.keyNames[code]!)
+                    if !reserved.contains(where: { $0.sameCombination(as: fallback) }) { self[action] = fallback; break }
                 }
             }
-            seen.append(self[action])
+            reserved.append(self[action])
         }
     }
     subscript(_ action: ShortcutAction) -> Shortcut {
-        get { switch action { case .save: return save; case .toggle: return toggle; case .save30: return quick30; case .save60: return quick60; case .save300: return quick300; case .save600: return quick600; case .manual: return manual; case .preview: return preview; case .marker: return marker } }
-        set { switch action { case .save: save=newValue; case .toggle: toggle=newValue; case .save30: quick30=newValue; case .save60: quick60=newValue; case .save300: quick300=newValue; case .save600: quick600=newValue; case .manual: manual=newValue; case .preview: preview=newValue; case .marker: marker=newValue } }
+        get {
+            if let slot = action.padSlot { return pads[slot] }
+            switch action { case .save: return save; case .toggle: return toggle; case .save30: return quick30; case .save60: return quick60; case .save300: return quick300; case .save600: return quick600; case .manual: return manual; case .preview: return preview; case .marker: return marker; default: return broadcast }
+        }
+        set {
+            if let slot = action.padSlot { pads[slot] = newValue; return }
+            switch action { case .save: save=newValue; case .toggle: toggle=newValue; case .save30: quick30=newValue; case .save60: quick60=newValue; case .save300: quick300=newValue; case .save600: quick600=newValue; case .manual: manual=newValue; case .preview: preview=newValue; case .marker: marker=newValue; default: broadcast=newValue }
+        }
     }
     func validate() throws {
+        guard pads.count == 8 else { throw SpyError.message("Нужны восемь сочетаний Soundpad.") }
         var seen: [Shortcut] = []
         for action in ShortcutAction.allCases {
             let value=self[action]

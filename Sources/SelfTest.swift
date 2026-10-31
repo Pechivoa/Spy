@@ -167,6 +167,23 @@ enum SelfTest {
 
 @main struct SpyBootstrap {
     @MainActor static func main() async {
+        if let index = CommandLine.arguments.firstIndex(of: "--soundpad-discord-test"), CommandLine.arguments.count > index + 1 {
+            do { try await SoundpadDiscordProbe.run(directory: URL(fileURLWithPath: CommandLine.arguments[index + 1])); exit(0) }
+            catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
+        if let index = CommandLine.arguments.firstIndex(of: "--soundpad-system-test"), CommandLine.arguments.count > index + 1 {
+            do { try await SoundpadTests.systemRoute(directory: URL(fileURLWithPath: CommandLine.arguments[index + 1])); exit(0) }
+            catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
+        for (flag, live) in [("--soundpad-test", false), ("--soundpad-loopback-test", true)] {
+            if let index = CommandLine.arguments.firstIndex(of: flag), CommandLine.arguments.count > index + 1 {
+                do {
+                    let root = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+                    if live { try await SoundpadTests.loopback(directory: root) } else { try await SoundpadTests.run(directory: root) }
+                    exit(0)
+                } catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+            }
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--soak-test"), CommandLine.arguments.count > index + 1 {
             do {
                 let seconds = CommandLine.arguments.count > index + 2 ? Double(CommandLine.arguments[index + 2]) ?? 60 : 60

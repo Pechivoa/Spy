@@ -62,6 +62,7 @@ struct SpyApp: App {
                 Divider()
                 Button("Проверить обновления Spy…") { model.section = 2; Task { await model.updates.check() } }
                 Button("Открыть папку видео") { model.openFolder() }
+                Button("Soundpad — звук в микрофон…") { model.showSoundpad() }
                 Button("Очередь сохранения…") { model.showExportQueue() }
             }
         }
@@ -123,6 +124,7 @@ struct SpyMenu: View {
         Button((model.manualRecording ? "Завершить запись · " : "Начать запись · ") + model.shortcuts.manual.label) { Task { await model.toggleManual() } }.disabled(model.diagnosticsBusy || model.busy || model.saving)
         Button(model.privacyPaused ? "Продолжить запись" : "Пауза записи") { model.togglePrivacyPause() }.disabled(!model.recording || model.busy)
         Toggle("Индикатор поверх игры", isOn: $model.hudEnabled)
+        SoundpadMenu(model: model, soundpad: model.soundpad)
         Button("Папка с видео") { model.openFolder() }
         Button("Очередь сохранения · \(model.queuedExports)") { model.showExportQueue() }
         Divider()
@@ -217,6 +219,7 @@ struct ContentView: View {
             Spacer(minLength: 0)
             topLink("Повтор", section: 0)
             topLink("Библиотека", section: 1)
+            Button("Soundpad") { model.showSoundpad() }.buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Theme.muted)
             Button { model.showExportQueue() } label: {
                 HStack(spacing: 6) {
                     Text("Очередь")
@@ -355,6 +358,7 @@ struct ContentView: View {
             shortcutRow(.manual, detail: "Полный сеанс от начала до остановки")
             shortcutRow(.toggle, detail: "Время задаётся ползунком на главном экране")
             shortcutRow(.preview, detail: "Открыть буфер из игры или другого приложения")
+            shortcutRow(.broadcast, detail: "Передача звука в виртуальный микрофон")
             shortcutRow(.marker, detail: "Отметить событие и найти его в просмотре")
             ForEach(ShortcutAction.quick) { shortcutRow($0, detail: "Последний фрагмент из текущего буфера") }
             HStack {
