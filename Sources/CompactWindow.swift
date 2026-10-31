@@ -218,6 +218,7 @@ struct CompactSpyView: View {
                 Button { model.addMomentMarker() } label: { Image(systemName: "bookmark").frame(width: 20) }
                     .buttonStyle(.plain).disabled(!model.canAddMomentMarker)
                     .accessibilityLabel("Добавить метку момента").help(model.shortcuts.marker.label)
+                SoundpadWidgetControls(model: model, soundpad: model.soundpad)
                 Spacer()
                 if tiny && !model.recoveryFolders.isEmpty {
                     Button("Восстановить") {
