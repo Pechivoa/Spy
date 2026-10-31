@@ -3,6 +3,21 @@ import Foundation
 
 @MainActor enum MicrophoneLibraryTests {
     static func run(directory: URL) async throws {
+        let suite = "Spy.MicrophoneDefault." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        if #available(macOS 15.0, *) {
+            try SelfTest.require(AppModel.initialMicrophone(in: defaults), "A new supported installation records microphone by default")
+        } else {
+            try SelfTest.require(!AppModel.initialMicrophone(in: defaults), "macOS 14 remains usable without microphone capture support")
+        }
+        defaults.set(false, forKey: "soundpad.mic")
+        defaults.set(0, forKey: "soundpad.micVolume")
+        if #available(macOS 15.0, *) { try SelfTest.require(AppModel.initialMicrophone(in: defaults), "Soundpad microphone controls never disable replay microphone defaults") }
+        defaults.set(false, forKey: "microphone")
+        try SelfTest.require(!AppModel.initialMicrophone(in: defaults), "An explicitly disabled replay microphone stays disabled")
+        defaults.set(true, forKey: "microphone")
+        try SelfTest.require(AppModel.initialMicrophone(in: defaults), "An explicitly enabled replay microphone stays enabled")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let engine = SpyEngine(cacheRoot: directory.appendingPathComponent("source-cache"))
         try engine.beginTest(seconds: 20, audio: true, microphone: true)
@@ -92,7 +107,15 @@ import Foundation
         guard let preview = model.bufferPreview, let playback = preview.playback else { throw SpyError.message("TEST FAILED: Buffer preview missing") }
         let liveControls = playback.videoAudioControls()
         try SelfTest.require(liveControls.canMuteMicrophone, "Unsaved buffer exposes microphone independently")
+        try SelfTest.require(preview.initialMicrophoneEnabled && liveControls.microphoneEnabled,
+                             "Fresh unsaved preview enables its recorded microphone by default")
+        let audiblePreview = try await PreviewMicrophoneAudit.mixedSamples(liveControls.item)
+        try SelfTest.require(AudioTests.magnitude(audiblePreview, frequency: 440) > 0.04 && AudioTests.magnitude(audiblePreview, frequency: 997) > 0.04,
+                             "The actual unsaved preview mix decodes both system and microphone tones by default")
         liveControls.microphoneEnabled = false
+        let mutedPreview = try await PreviewMicrophoneAudit.mixedSamples(liveControls.item)
+        try SelfTest.require(AudioTests.magnitude(mutedPreview, frequency: 440) > 0.04 && AudioTests.magnitude(mutedPreview, frequency: 997) < 0.001,
+                             "Preview mute changes only the microphone, not the system audio")
         let noMic = try await model.saveBufferPreview(preview, microphoneEnabled: false)
         try await requireSystemOnly(noMic)
         let withMic = try await model.saveBufferPreview(preview, microphoneEnabled: true)

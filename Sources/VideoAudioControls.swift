@@ -156,7 +156,7 @@ struct MicrophonePickerView: View {
                 Button { model.refreshMicrophones() } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.bordered).help("Обновить список микрофонов")
             }
-            Text(model.recording ? "Чтобы сменить микрофон, остановите повтор." : "Выберите устройство и включите «Микрофон» для записи голоса.")
+            Text(model.recording ? "Чтобы сменить микрофон, остановите повтор." : model.microphone ? "Микрофон включён: голос записывается вместе с системным звуком." : "Микрофон выключен. Включите его, чтобы записывать голос.")
                 .font(.system(size: 10)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
         }.font(.system(size: 11)).onAppear { model.refreshMicrophones() }
     }

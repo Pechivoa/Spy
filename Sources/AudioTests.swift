@@ -21,7 +21,7 @@ enum AudioTests {
         }
         return result
     }
-    static func samples(_ asset: AVURLAsset, track: AVAssetTrack) throws -> [Float] {
+    static func samples(_ asset: AVAsset, track: AVAssetTrack) throws -> [Float] {
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
             AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 48_000,

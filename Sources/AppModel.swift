@@ -222,6 +222,12 @@ final class AppModel: ObservableObject {
     private var observers: [NSObjectProtocol] = []
     let previewMode: Bool
 
+    static func initialMicrophone(in defaults: UserDefaults) -> Bool {
+        if defaults.object(forKey: "microphone") != nil { return defaults.bool(forKey: "microphone") }
+        if #available(macOS 15.0, *) { return true }
+        return false
+    }
+
     init(preview: Bool = false, defaults suppliedDefaults: UserDefaults? = nil, captureAccess: CaptureAccess? = nil, previewRoot suppliedPreviewRoot: URL? = nil) {
         self.captureAccess = captureAccess ?? .live
         let defaults = suppliedDefaults ?? (preview ? UserDefaults(suiteName: "Spy.Preview." + UUID().uuidString)! : UserDefaults.standard)
@@ -233,7 +239,7 @@ final class AppModel: ObservableObject {
         quality = Quality(rawValue: defaults.string(forKey: "quality") ?? "") ?? .balanced
         systemAudio = defaults.object(forKey: "audio") == nil ? true : defaults.bool(forKey: "audio")
         applicationAudio = ApplicationAudioSelection(defaults: defaults)
-        microphone = preview ? false : defaults.bool(forKey: "microphone")
+        microphone = preview ? false : Self.initialMicrophone(in: defaults)
         microphoneCleanup = defaults.bool(forKey: "microphoneCleanup")
         captureMode = CaptureMode(rawValue: defaults.string(forKey: "captureMode") ?? "") ?? .display
         windowID = CGWindowID(clamping: defaults.integer(forKey: "windowID"))
@@ -302,7 +308,7 @@ final class AppModel: ObservableObject {
             try configureExportQueue()
             if exportQueue.restoredCount > 0 { message = "Восстановлена очередь: \(exportQueue.restoredCount). Откройте очередь, чтобы продолжить сохранение." }
         } catch { journal.record(.error, "Восстановление очереди", describeError(error)) }
-        journal.record(.info, "Запуск", "Spy 1.17.0 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
+        journal.record(.info, "Запуск", "Spy 1.17.1 запущен. " + ProcessInfo.processInfo.operatingSystemVersionString)
         if let issue = metadata.loadError { journal.record(.error, "Данные библиотеки", "Автоочистка приостановлена для защиты избранного.\n" + metadata.url.path + "\n" + issue) }
         hotkeys = HotKeys(bindings: shortcuts) { [weak self] id in
             Task { @MainActor in

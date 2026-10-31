@@ -167,6 +167,10 @@ enum SelfTest {
 
 @main struct SpyBootstrap {
     @MainActor static func main() async {
+        if let index = CommandLine.arguments.firstIndex(of: "--preview-microphone-audit"), CommandLine.arguments.count > index + 1 {
+            do { try await PreviewMicrophoneAudit.run(directory: URL(fileURLWithPath: CommandLine.arguments[index + 1])); exit(0) }
+            catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
+        }
         if let index = CommandLine.arguments.firstIndex(of: "--soundpad-discord-test"), CommandLine.arguments.count > index + 1 {
             do { try await SoundpadDiscordProbe.run(directory: URL(fileURLWithPath: CommandLine.arguments[index + 1])); exit(0) }
             catch { fputs(error.localizedDescription + "\n", stderr); exit(1) }
